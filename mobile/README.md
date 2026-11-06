@@ -23,7 +23,10 @@ In Supabase SQL Editor, run the migrations in `supabase/migrations/` in filename
 - Email/password sign-up and sign-in through Supabase Auth
 - Profile creation trigger and PostgreSQL schema
 - RLS policies for profiles, follows, videos, likes, comments, chat membership, messages, snaps and notifications
-- Realtime message subscription
+- Search signed-in users by username or display name
+- Start or reopen a direct conversation without needing to copy a conversation UUID
+- Recent conversation list with the latest message preview
+- Realtime message subscription and a dedicated conversation screen
 - Vertical, swipeable video feed using `expo-video`; only the currently visible item plays
 - Video picker and publishing flow: uploads to the public `videos` bucket, inserts the matching `videos` row, and removes the uploaded object if the row insert fails
 - Periodic watch-time and completion signals written to `video_views`
@@ -33,7 +36,7 @@ In Supabase SQL Editor, run the migrations in `supabase/migrations/` in filename
 The feed prioritizes followed creators, then recent posts. Supabase RLS controls which public and followed-only rows a signed-in user can read. This is a starter ranking, not a machine-learning recommendation system. Watch metrics are sampled while a video is actively playing; short sessions under the five-second sampling interval may not be recorded. Upload currently reads the selected local URI into a Blob, which can use substantial memory for large files. For production, move to resumable uploads, background transfer, moderation, transcoding, thumbnails and CDN delivery.
 
 ## Important production work still required
-1. Add contact/user discovery, create-conversation flow, group chat UI, message pagination, read receipts, typing presence, push notifications and attachment handling.
+1. Add contact discovery, group chat UI, message pagination, read receipts, typing presence, push notifications and attachment handling.
 2. Replace the starter feed ordering with a server-side recommendation pipeline using watch duration, completion, skips, follows, likes, freshness, safety and diversity. Do not rank solely by likes.
 3. Add an automated scheduled cleanup job for expired snap rows and their private Storage objects. Expiry filtering alone does not physically delete media.
 4. Implement WebRTC calling with a native WebRTC module, signaling, STUN/TURN credentials, call lifecycle, permissions, reconnect handling and abuse controls. Native WebRTC is not supported in Expo Go; use an Expo development build / EAS Build and validate the selected WebRTC package against the Expo SDK.
@@ -43,9 +46,9 @@ The feed prioritizes followed creators, then recent posts. Supabase RLS controls
 - Video bucket is public for playback. Do not upload private content there.
 - Snap bucket is private. The starter snap helper stores a signed URL; for a hardened release, store the object path in the database and mint short-lived signed URLs only after authorization. A signed URL is a bearer link until it expires.
 - Set explicit Supabase bucket size/MIME limits appropriate to your launch. Configure storage lifecycle cleanup.
-- Supabase Realtime message subscriptions require the messages table to be in the Realtime publication; the migration adds it if absent.
+- Supabase Realtime message subscriptions require the messages table to be in the Realtime publication; the initial migration adds it if absent.
 
 ## Suggested next milestones
-1. Finish user discovery and conversation creation.
+1. Add group chat creation and member management.
 2. Add WebRTC calls with an Expo development build.
 3. Ship feed ranking, push notifications and moderation.
