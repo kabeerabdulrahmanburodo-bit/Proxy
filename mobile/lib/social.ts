@@ -114,7 +114,7 @@ export async function getConversations(): Promise<ConversationSummary[]> {
   if (profileResult.error) throw profileResult.error;
 
   const profilesById = new Map<string, UserSearchResult>(
-    ((profileResult.data ?? []) as UserSearchResult[]).map(profile => [profile.id, profile])
+    ((profileResult.data ?? []) as UserSearchResult[]).map(profile => [profile.id, profile] as const)
   );
   const otherUserByConversation = new Map<string, UserSearchResult>();
   memberRows.forEach(row => {
