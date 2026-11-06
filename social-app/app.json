@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "PROXY",
+    "slug": "proxy-social",
+    "scheme": "proxy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "plugins": [
+      "expo-router",
+      "expo-image-picker"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#09090D"
+      }
+    }
+  }
+}
