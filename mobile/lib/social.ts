@@ -1,5 +1,7 @@
 import { supabase } from './supabase';
-import type { VideoPost, ChatMessage } from './types';
+import type {
+  ChatMessage, ConversationDetails, ConversationSummary, UserSearchResult, VideoPost,
+} from './types';
 
 export async function getVideoFeed(limit = 20): Promise<VideoPost[]> {
   const { data: { user } } = await supabase.auth.getUser();
@@ -64,6 +66,120 @@ export async function recordVideoView(videoId: string, watchSeconds: number, com
     video_id: videoId, user_id: user.id, watch_seconds: seconds, completed,
   });
   if (error) console.warn('Could not record video view:', error.message);
+}
+
+export async function searchUsers(query: string): Promise<UserSearchResult[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to search for people.');
+  const term = query.trim().replace(/[^a-zA-Z0-9_ -]/g, '').slice(0, 32);
+  if (term.length < 2) return [];
+  const pattern = '%' + term + '%';
+  const { data, error } = await supabase.from('profiles')
+    .select('id,username,display_name,avatar_url')
+    .neq('id', user.id)
+    .or('username.ilike.' + pattern + ',display_name.ilike.' + pattern)
+    .order('username', { ascending: true })
+    .limit(20);
+  if (error) throw error;
+  return (data ?? []) as UserSearchResult[];
+}
+
+export async function getConversations(): Promise<ConversationSummary[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to view your chats.');
+
+  const { data: memberships, error: membershipError } = await supabase
+    .from('conversation_members').select('conversation_id').eq('user_id', user.id);
+  if (membershipError) throw membershipError;
+  const conversationIds = [...new Set((memberships ?? []).map(row => row.conversation_id))];
+  if (conversationIds.length === 0) return [];
+
+  const [conversationResult, memberResult, messageResult] = await Promise.all([
+    supabase.from('conversations').select('id,is_group,title,created_at')
+      .in('id', conversationIds).order('created_at', { ascending: false }),
+    supabase.from('conversation_members').select('conversation_id,user_id')
+      .in('conversation_id', conversationIds),
+    supabase.from('messages').select('conversation_id,sender_id,body,created_at')
+      .in('conversation_id', conversationIds).order('created_at', { ascending: false }).limit(200),
+  ]);
+  if (conversationResult.error) throw conversationResult.error;
+  if (memberResult.error) throw memberResult.error;
+  if (messageResult.error) throw messageResult.error;
+
+  const memberRows = (memberResult.data ?? []) as Array<{ conversation_id: string; user_id: string }>;
+  const otherUserIds = [...new Set(memberRows.filter(row => row.user_id !== user.id).map(row => row.user_id))];
+  const profileResult = otherUserIds.length
+    ? await supabase.from('profiles').select('id,username,display_name,avatar_url').in('id', otherUserIds)
+    : { data: [], error: null };
+  if (profileResult.error) throw profileResult.error;
+
+  const profilesById = new Map<string, UserSearchResult>(
+    ((profileResult.data ?? []) as UserSearchResult[]).map(profile => [profile.id, profile])
+  );
+  const otherUserByConversation = new Map<string, UserSearchResult>();
+  memberRows.forEach(row => {
+    if (row.user_id !== user.id) {
+      const profile = profilesById.get(row.user_id);
+      if (profile && !otherUserByConversation.has(row.conversation_id)) {
+        otherUserByConversation.set(row.conversation_id, profile);
+      }
+    }
+  });
+  const lastMessageByConversation = new Map<string, ConversationSummary['last_message']>();
+  (messageResult.data ?? []).forEach(message => {
+    if (!lastMessageByConversation.has(message.conversation_id)) {
+      lastMessageByConversation.set(message.conversation_id, {
+        body: message.body, created_at: message.created_at, sender_id: message.sender_id,
+      });
+    }
+  });
+
+  return (conversationResult.data ?? []).map(conversation => ({
+    ...conversation,
+    other_user: otherUserByConversation.get(conversation.id) ?? null,
+    last_message: lastMessageByConversation.get(conversation.id) ?? null,
+  })) as ConversationSummary[];
+}
+
+export async function getConversationDetails(conversationId: string): Promise<ConversationDetails> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to open this chat.');
+  const { data: conversation, error } = await supabase.from('conversations')
+    .select('id,is_group,title').eq('id', conversationId).single();
+  if (error) throw error;
+
+  const { data: members, error: membersError } = await supabase.from('conversation_members')
+    .select('user_id').eq('conversation_id', conversationId).neq('user_id', user.id);
+  if (membersError) throw membersError;
+  const otherUserId = members?.[0]?.user_id ?? null;
+  let otherUser: UserSearchResult | null = null;
+  if (otherUserId) {
+    const { data: profile, error: profileError } = await supabase.from('profiles')
+      .select('id,username,display_name,avatar_url').eq('id', otherUserId).maybeSingle();
+    if (profileError) throw profileError;
+    otherUser = (profile as UserSearchResult | null) ?? null;
+  }
+  const title = conversation.is_group
+    ? (conversation.title || 'Group chat')
+    : (otherUser?.display_name || (otherUser ? '@' + otherUser.username : 'Direct message'));
+  return { ...conversation, title, other_user: otherUser } as ConversationDetails;
+}
+
+export async function getConversationMessages(conversationId: string): Promise<ChatMessage[]> {
+  const { data, error } = await supabase.from('messages').select('*')
+    .eq('conversation_id', conversationId).order('created_at', { ascending: true }).limit(100);
+  if (error) throw error;
+  return (data ?? []) as ChatMessage[];
+}
+
+export async function createDirectConversation(otherUserId: string): Promise<string> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+  if (otherUserId === user.id) throw new Error('You cannot start a chat with yourself.');
+  const { data, error } = await supabase.rpc('create_direct_conversation', { other_user_id: otherUserId });
+  if (error) throw error;
+  if (typeof data !== 'string' || !data) throw new Error('The chat could not be created.');
+  return data;
 }
 
 export async function sendMessage(conversationId: string, body: string) {
