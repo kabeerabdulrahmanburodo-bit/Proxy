@@ -146,12 +146,15 @@ create policy "Delete own comments" on public.comments for delete to authenticat
 create policy "Record own views" on public.video_views for insert to authenticated with check (auth.uid()=user_id);
 create policy "View own view history" on public.video_views for select to authenticated using (auth.uid()=user_id);
 
-create policy "Members can view conversations" on public.conversations for select to authenticated using (exists(select 1 from public.conversation_members m where m.conversation_id=id and m.user_id=auth.uid()));
+create or replace function public.is_conversation_member(_conversation_id uuid, _user_id uuid)
+returns boolean language sql stable security definer set search_path = public
+as $ select exists(select 1 from public.conversation_members where conversation_id=_conversation_id and user_id=_user_id); $;
+create policy "Members can view conversations" on public.conversations for select to authenticated using (public.is_conversation_member(id,auth.uid()));
 create policy "Authenticated users create conversations" on public.conversations for insert to authenticated with check (auth.uid()=created_by);
-create policy "Members list members" on public.conversation_members for select to authenticated using (exists(select 1 from public.conversation_members m where m.conversation_id=conversation_id and m.user_id=auth.uid()));
-create policy "Conversation creator adds members" on public.conversation_members for insert to authenticated with check (exists(select 1 from public.conversations c where c.id=conversation_id and c.created_by=auth.uid()) or auth.uid()=user_id);
-create policy "Members can read messages" on public.messages for select to authenticated using (exists(select 1 from public.conversation_members m where m.conversation_id=messages.conversation_id and m.user_id=auth.uid()));
-create policy "Members can send as themselves" on public.messages for insert to authenticated with check (auth.uid()=sender_id and exists(select 1 from public.conversation_members m where m.conversation_id=messages.conversation_id and m.user_id=auth.uid()));
+create policy "Members list members" on public.conversation_members for select to authenticated using (public.is_conversation_member(conversation_id,auth.uid()));
+create policy "Conversation creator adds members" on public.conversation_members for insert to authenticated with check (exists(select 1 from public.conversations c where c.id=conversation_id and c.created_by=auth.uid()));
+create policy "Members can read messages" on public.messages for select to authenticated using (public.is_conversation_member(conversation_id,auth.uid()));
+create policy "Members can send as themselves" on public.messages for insert to authenticated with check (auth.uid()=sender_id and public.is_conversation_member(conversation_id,auth.uid()));
 create policy "Sender can update own message" on public.messages for update to authenticated using (auth.uid()=sender_id) with check (auth.uid()=sender_id);
 
 create policy "Users see unexpired snaps and own snaps" on public.snaps for select to authenticated using (expires_at > now() and (user_id=auth.uid() or exists(select 1 from public.follows f where f.follower_id=auth.uid() and f.following_id=user_id)));
