@@ -1,12 +1,10 @@
 import { useState } from "react";
-import { View, Text, ScrollView, ImageBackground, Pressable, StyleSheet, Dimensions } from "react-native";
+import { View, Text, ScrollView, ImageBackground, Pressable, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
-const { height } = Dimensions.get("window");
 const stories = ["Your story", "mariam", "abdul", "zara", "daniel"];
 const clips = [
-  { user: "@creator_one", caption: "Little moments, big memories. ✨", image: "https://images.unsplash.com/photo-1519608487953-e999c86e7455?w=900", likes: "12.4K" },
-  { user: "@streetframes", caption: "City lights after dark 🌃", image: "https://images.unsplash.com/photo-1519608487953-e999c86e7455?w=900", likes: "8,203" }
+  { user: "@creator_one", caption: "Little moments, big memories. ✨", image: "https://images.unsplash.com/photo-1519608487953-e999c86e7455?w=900", likes: "12.4K" }
 ];
 
 export default function HomeScreen() {
@@ -63,5 +61,5 @@ const s = StyleSheet.create({
   stories:{height:94,paddingLeft:12,borderBottomWidth:1,borderBottomColor:"#22222B"},story:{width:67,alignItems:"center",paddingTop:8},storyRing:{width:54,height:54,borderRadius:27,borderWidth:2,borderColor:"#A66BFF",alignItems:"center",justifyContent:"center"},ownRing:{borderColor:"#5D5D69",borderStyle:"dashed"},storyInner:{width:46,height:46,borderRadius:23,backgroundColor:"#292936",alignItems:"center",justifyContent:"center"},storyName:{color:"#E6E6EB",fontSize:10,marginTop:4},
   video:{flex:1,justifyContent:"space-between"},videoShade:{...StyleSheet.absoluteFillObject,backgroundColor:"rgba(0,0,0,0.24)"},videoTop:{flexDirection:"row",justifyContent:"center",gap:25,paddingTop:17},feedLabel:{color:"white",fontSize:13,fontWeight:"800",textShadowColor:"#000",textShadowRadius:5},
   videoBottom:{flexDirection:"row",alignItems:"flex-end",justifyContent:"space-between",paddingHorizontal:16,paddingBottom:24},creator:{flex:1,paddingRight:12},creatorName:{color:"white",fontSize:15,fontWeight:"800"},caption:{color:"white",fontSize:13,marginTop:7},followBtn:{marginTop:12,borderWidth:1,borderColor:"white",borderRadius:7,paddingHorizontal:14,paddingVertical:6,alignSelf:"flex-start"},followText:{color:"white",fontWeight:"700",fontSize:12},
-  engagement:{alignItems:"center",gap:23},action:{alignItems:"center",gap:4},actionText:{color:"white",fontSize:10,fontWeight:"700'},demo:{alignSelf:"center",marginBottom:7,backgroundColor:"rgba(0,0,0,.35)",padding:5,borderRadius:4},demoText:{color:"#DDD",fontSize:9}
+  engagement:{alignItems:"center",gap:23},action:{alignItems:"center",gap:4},actionText:{color:"white",fontSize:10,fontWeight:"700"},demo:{alignSelf:"center",marginBottom:7,backgroundColor:"rgba(0,0,0,.35)",padding:5,borderRadius:4},demoText:{color:"#DDD",fontSize:9}
 });
