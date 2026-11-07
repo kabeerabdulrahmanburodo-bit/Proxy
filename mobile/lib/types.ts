@@ -24,6 +24,7 @@ export type ConversationDetails = {
   id: string;
   is_group: boolean;
   title: string;
+  created_by: string;
   other_user: UserSearchResult | null;
   members: UserSearchResult[];
   is_creator: boolean;
