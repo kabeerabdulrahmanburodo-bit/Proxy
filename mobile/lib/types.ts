@@ -25,6 +25,8 @@ export type ConversationDetails = {
   is_group: boolean;
   title: string;
   other_user: UserSearchResult | null;
+  members: UserSearchResult[];
+  is_creator: boolean;
 };
 export type Snap = {
   id: string; user_id: string; media_url: string; media_type: 'image' | 'video';
