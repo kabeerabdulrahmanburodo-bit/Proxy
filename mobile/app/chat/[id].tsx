@@ -80,8 +80,17 @@ export default function ConversationScreen() {
       </Pressable>
       <View style={{ flex: 1 }}>
         <Text style={{ color: white, fontSize: 16, fontWeight: '900' }} numberOfLines={1}>{title}</Text>
-        {details?.other_user?.username ? <Text style={{ color: muted, marginTop: 3, fontSize: 11 }}>@{details.other_user.username}</Text> : null}
+        {details?.is_group
+          ? <Text style={{ color: muted, marginTop: 3, fontSize: 11 }}>GROUP · {details.members.length} MEMBERS</Text>
+          : details?.other_user?.username
+            ? <Text style={{ color: muted, marginTop: 3, fontSize: 11 }}>@{details.other_user.username}</Text>
+            : null}
       </View>
+      {details?.is_group ? (
+        <Pressable onPress={() => router.push({ pathname: '/group/[id]', params: { id: id ?? '' } })} style={{ paddingHorizontal: 10, paddingVertical: 8 }}>
+          <Text style={{ color: purple, fontSize: 11, fontWeight: '900' }}>MEMBERS</Text>
+        </Pressable>
+      ) : null}
     </View>
 
     {loading ? <ActivityIndicator color={purple} style={{ flex: 1 }} /> :
