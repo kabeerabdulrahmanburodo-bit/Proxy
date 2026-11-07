@@ -24,7 +24,8 @@ In Supabase SQL Editor, run the migrations in `supabase/migrations/` in filename
 - Profile creation trigger and PostgreSQL schema
 - RLS policies for profiles, follows, videos, likes, comments, chat membership, messages, snaps and notifications
 - Search signed-in users by username or display name
-- Start or reopen a direct conversation without needing to copy a conversation UUID
+- Start or reopen direct conversations without copying a conversation UUID
+- Create named group chats with up to 50 members and add participants from the group details screen
 - Recent conversation list with the latest message preview
 - Realtime message subscription and a dedicated conversation screen
 - Vertical, swipeable video feed using `expo-video`; only the currently visible item plays
@@ -49,6 +50,6 @@ The feed prioritizes followed creators, then recent posts. Supabase RLS controls
 - Supabase Realtime message subscriptions require the messages table to be in the Realtime publication; the initial migration adds it if absent.
 
 ## Suggested next milestones
-1. Add group chat creation and member management.
+1. Add group member removal/leave controls, message pagination, read receipts, typing presence, push notifications and attachment handling.
 2. Add WebRTC calls with an Expo development build.
 3. Ship feed ranking, push notifications and moderation.
