@@ -89,8 +89,15 @@ export default function Chats() {
 
   return <View style={{ flex: 1, backgroundColor: '#09090b', paddingTop: 56 }}>
     <View style={{ paddingHorizontal: 20, paddingBottom: 16 }}>
-      <Text style={{ color: purple, fontSize: 22, fontWeight: '900', letterSpacing: 4 }}>MESSAGES</Text>
-      <Text style={{ color: muted, marginTop: 5, fontSize: 12 }}>Find people and keep the conversation moving.</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={{ flex: 1, paddingRight: 12 }}>
+          <Text style={{ color: purple, fontSize: 22, fontWeight: '900', letterSpacing: 4 }}>MESSAGES</Text>
+          <Text style={{ color: muted, marginTop: 5, fontSize: 12 }}>Find people and keep the conversation moving.</Text>
+        </View>
+        <Pressable onPress={() => router.push('/group/new')} style={{ backgroundColor: '#302844', borderRadius: 13, paddingHorizontal: 13, paddingVertical: 11 }}>
+          <Text style={{ color: purple, fontWeight: '900', fontSize: 11 }}>＋ GROUP</Text>
+        </Pressable>
+      </View>
       <TextInput
         value={query}
         onChangeText={setQuery}
