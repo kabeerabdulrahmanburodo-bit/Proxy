@@ -1,0 +1,256 @@
+import { supabase } from './supabase';
+import type {
+  ChatMessage, ConversationDetails, ConversationSummary, UserSearchResult, VideoPost,
+} from './types';
+
+export async function getVideoFeed(limit = 20): Promise<VideoPost[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to view your feed.');
+  const { data: follows, error: followsError } = await supabase
+    .from('follows').select('following_id').eq('follower_id', user.id);
+  if (followsError) throw followsError;
+  const followingIds = (follows ?? []).map(row => row.following_id);
+  const { data, error } = await supabase.from('videos')
+    .select('id,user_id,caption,video_url,thumbnail_url,created_at,profiles(username,avatar_url)')
+    .in('visibility', ['public', 'followers'])
+    .order('created_at', { ascending: false }).limit(limit * 3);
+  if (error) throw error;
+  const posts = (data ?? []) as unknown as VideoPost[];
+  // RLS filters follower-only posts; this baseline ranking prioritizes followed creators.
+  return posts.sort((a, b) =>
+    Number(followingIds.includes(b.user_id)) - Number(followingIds.includes(a.user_id))
+  ).slice(0, limit);
+}
+
+export async function publishVideo(uri: string, fileName: string, contentType: string, caption: string) {
+  const text = caption.trim();
+  if (text.length > 2200) throw new Error('Caption must be 2,200 characters or fewer.');
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+
+  const response = await fetch(uri);
+  if (!response.ok) throw new Error('Could not read the selected video from your device.');
+  const blob = await response.blob();
+  if (!blob.size) throw new Error('The selected video is empty.');
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const path = user.id + '/' + Date.now() + '-' + (safeName || 'upload.mp4');
+  const mime = contentType || blob.type || 'video/mp4';
+
+  const { error: uploadError } = await supabase.storage.from('videos').upload(path, blob, {
+    contentType: mime, upsert: false,
+  });
+  if (uploadError) throw uploadError;
+
+  const { data: publicData } = supabase.storage.from('videos').getPublicUrl(path);
+  const { data: post, error: insertError } = await supabase.from('videos').insert({
+    user_id: user.id,
+    caption: text || null,
+    video_url: publicData.publicUrl,
+    visibility: 'public',
+  }).select('id,user_id,caption,video_url,thumbnail_url,created_at').single();
+
+  if (insertError) {
+    // Avoid leaving an orphaned public upload if its database row cannot be created.
+    await supabase.storage.from('videos').remove([path]);
+    throw insertError;
+  }
+  return post as VideoPost;
+}
+
+export async function recordVideoView(videoId: string, watchSeconds: number, completed = false) {
+  const seconds = Math.max(0, Math.floor(watchSeconds));
+  if (seconds === 0 && !completed) return;
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
+  const { error } = await supabase.from('video_views').insert({
+    video_id: videoId, user_id: user.id, watch_seconds: seconds, completed,
+  });
+  if (error) console.warn('Could not record video view:', error.message);
+}
+
+export async function searchUsers(query: string): Promise<UserSearchResult[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to search for people.');
+  const term = query.trim().replace(/[^a-zA-Z0-9_ -]/g, '').slice(0, 32);
+  if (term.length < 2) return [];
+  const pattern = '%' + term + '%';
+  const { data, error } = await supabase.from('profiles')
+    .select('id,username,display_name,avatar_url')
+    .neq('id', user.id)
+    .or('username.ilike.' + pattern + ',display_name.ilike.' + pattern)
+    .order('username', { ascending: true })
+    .limit(20);
+  if (error) throw error;
+  return (data ?? []) as UserSearchResult[];
+}
+
+export async function getConversations(): Promise<ConversationSummary[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to view your chats.');
+
+  const { data: memberships, error: membershipError } = await supabase
+    .from('conversation_members').select('conversation_id').eq('user_id', user.id);
+  if (membershipError) throw membershipError;
+  const conversationIds = [...new Set((memberships ?? []).map(row => row.conversation_id))];
+  if (conversationIds.length === 0) return [];
+
+  const [conversationResult, memberResult, messageResult] = await Promise.all([
+    supabase.from('conversations').select('id,is_group,title,created_at')
+      .in('id', conversationIds).order('created_at', { ascending: false }),
+    supabase.from('conversation_members').select('conversation_id,user_id')
+      .in('conversation_id', conversationIds),
+    supabase.from('messages').select('conversation_id,sender_id,body,created_at')
+      .in('conversation_id', conversationIds).order('created_at', { ascending: false }).limit(200),
+  ]);
+  if (conversationResult.error) throw conversationResult.error;
+  if (memberResult.error) throw memberResult.error;
+  if (messageResult.error) throw messageResult.error;
+
+  const memberRows = (memberResult.data ?? []) as Array<{ conversation_id: string; user_id: string }>;
+  const otherUserIds = [...new Set(memberRows.filter(row => row.user_id !== user.id).map(row => row.user_id))];
+  const profileResult = otherUserIds.length
+    ? await supabase.from('profiles').select('id,username,display_name,avatar_url').in('id', otherUserIds)
+    : { data: [], error: null };
+  if (profileResult.error) throw profileResult.error;
+
+  const profilesById = new Map<string, UserSearchResult>(
+    ((profileResult.data ?? []) as UserSearchResult[]).map(profile => [profile.id, profile] as const)
+  );
+  const otherUserByConversation = new Map<string, UserSearchResult>();
+  memberRows.forEach(row => {
+    if (row.user_id !== user.id) {
+      const profile = profilesById.get(row.user_id);
+      if (profile && !otherUserByConversation.has(row.conversation_id)) {
+        otherUserByConversation.set(row.conversation_id, profile);
+      }
+    }
+  });
+  const lastMessageByConversation = new Map<string, ConversationSummary['last_message']>();
+  (messageResult.data ?? []).forEach(message => {
+    if (!lastMessageByConversation.has(message.conversation_id)) {
+      lastMessageByConversation.set(message.conversation_id, {
+        body: message.body, created_at: message.created_at, sender_id: message.sender_id,
+      });
+    }
+  });
+
+  return (conversationResult.data ?? []).map(conversation => ({
+    ...conversation,
+    other_user: otherUserByConversation.get(conversation.id) ?? null,
+    last_message: lastMessageByConversation.get(conversation.id) ?? null,
+  })) as ConversationSummary[];
+}
+
+export async function getConversationDetails(conversationId: string): Promise<ConversationDetails> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to open this chat.');
+  const { data: conversation, error } = await supabase.from('conversations')
+    .select('id,is_group,title,created_by').eq('id', conversationId).single();
+  if (error) throw error;
+
+  const { data: memberRows, error: membersError } = await supabase.from('conversation_members')
+    .select('user_id').eq('conversation_id', conversationId);
+  if (membersError) throw membersError;
+  const memberIds = [...new Set((memberRows ?? []).map(row => row.user_id))];
+  const profileResult = memberIds.length
+    ? await supabase.from('profiles').select('id,username,display_name,avatar_url').in('id', memberIds)
+    : { data: [], error: null };
+  if (profileResult.error) throw profileResult.error;
+
+  const members = (profileResult.data ?? []) as UserSearchResult[];
+  const otherUser = members.find(member => member.id !== user.id) ?? null;
+  const title = conversation.is_group
+    ? (conversation.title || 'Group chat')
+    : (otherUser?.display_name || (otherUser ? '@' + otherUser.username : 'Direct message'));
+  return {
+    ...conversation,
+    title,
+    other_user: otherUser,
+    members,
+    is_creator: conversation.created_by === user.id,
+  } as ConversationDetails;
+}
+
+export async function getConversationMessages(conversationId: string): Promise<ChatMessage[]> {
+  const { data, error } = await supabase.from('messages').select('*')
+    .eq('conversation_id', conversationId).order('created_at', { ascending: true }).limit(100);
+  if (error) throw error;
+  return (data ?? []) as ChatMessage[];
+}
+
+export async function createDirectConversation(otherUserId: string): Promise<string> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+  if (otherUserId === user.id) throw new Error('You cannot start a chat with yourself.');
+  const { data, error } = await supabase.rpc('create_direct_conversation', { other_user_id: otherUserId });
+  if (error) throw error;
+  if (typeof data !== 'string' || !data) throw new Error('The chat could not be created.');
+  return data;
+}
+
+export async function createGroupConversation(title: string, memberIds: string[]): Promise<string> {
+  const cleanTitle = title.trim();
+  if (!cleanTitle || cleanTitle.length > 60) {
+    throw new Error('Group name must be between 1 and 60 characters.');
+  }
+  const uniqueIds = [...new Set(memberIds.filter(Boolean))];
+  if (uniqueIds.length < 2) throw new Error('Choose at least two other people for a group.');
+  if (uniqueIds.length > 49) throw new Error('A group can have at most 50 members, including you.');
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+  const { data, error } = await supabase.rpc('create_group_conversation', {
+    group_title: cleanTitle,
+    member_ids: uniqueIds,
+  });
+  if (error) throw error;
+  if (typeof data !== 'string' || !data) throw new Error('The group could not be created.');
+  return data;
+}
+
+export async function addGroupConversationMembers(conversationId: string, memberIds: string[]): Promise<number> {
+  const uniqueIds = [...new Set(memberIds.filter(Boolean))];
+  if (uniqueIds.length === 0) throw new Error('Choose at least one person to add.');
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+  const { data, error } = await supabase.rpc('add_group_conversation_members', {
+    target_conversation_id: conversationId,
+    member_ids: uniqueIds,
+  });
+  if (error) throw error;
+  if (typeof data !== 'number' || !Number.isInteger(data) || data < 0) {
+    throw new Error('The group membership update returned an invalid result.');
+  }
+  return data;
+}
+
+
+export async function sendMessage(conversationId: string, body: string) {
+  const text = body.trim();
+  if (!text) throw new Error('Message cannot be empty.');
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+  const { data, error } = await supabase.from('messages')
+    .insert({ conversation_id: conversationId, sender_id: user.id, body: text })
+    .select().single();
+  if (error) throw error;
+  return data as ChatMessage;
+}
+
+export function subscribeToMessages(conversationId: string, onMessage: (message: ChatMessage) => void) {
+  return supabase.channel('messages:' + conversationId)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'conversation_id=eq.' + conversationId },
+      payload => onMessage(payload.new as ChatMessage))
+    .subscribe();
+}
+
+export async function createSnap(mediaUrl: string, mediaType: 'image' | 'video', lifetimeHours = 24) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+  const expiresAt = new Date(Date.now() + lifetimeHours * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase.from('snaps')
+    .insert({ user_id: user.id, media_url: mediaUrl, media_type: mediaType, expires_at: expiresAt })
+    .select().single();
+  if (error) throw error;
+  return data;
+}
