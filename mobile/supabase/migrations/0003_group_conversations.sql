@@ -1,6 +1,7 @@
--- Membership writes go through SECURITY DEFINER RPCs only.
--- The older creator-only INSERT policy could let a direct-chat creator add a third party
--- to a one-to-one conversation and expose its history, so remove that broad table policy.
+-- Conversation and membership writes go through the validated SECURITY DEFINER RPCs.
+-- The old creator policies allowed orphan conversations and could let a direct-chat
+-- creator add a third party to a one-to-one thread, exposing its message history.
+drop policy if exists "Authenticated users create conversations" on public.conversations;
 drop policy if exists "Conversation creator adds members" on public.conversation_members;
 
 -- Group conversations are created and expanded through SECURITY DEFINER RPCs.
