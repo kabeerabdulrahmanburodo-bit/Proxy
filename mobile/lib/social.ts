@@ -145,24 +145,30 @@ export async function getConversationDetails(conversationId: string): Promise<Co
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sign in to open this chat.');
   const { data: conversation, error } = await supabase.from('conversations')
-    .select('id,is_group,title').eq('id', conversationId).single();
+    .select('id,is_group,title,created_by').eq('id', conversationId).single();
   if (error) throw error;
 
-  const { data: members, error: membersError } = await supabase.from('conversation_members')
-    .select('user_id').eq('conversation_id', conversationId).neq('user_id', user.id);
+  const { data: memberRows, error: membersError } = await supabase.from('conversation_members')
+    .select('user_id').eq('conversation_id', conversationId);
   if (membersError) throw membersError;
-  const otherUserId = members?.[0]?.user_id ?? null;
-  let otherUser: UserSearchResult | null = null;
-  if (otherUserId) {
-    const { data: profile, error: profileError } = await supabase.from('profiles')
-      .select('id,username,display_name,avatar_url').eq('id', otherUserId).maybeSingle();
-    if (profileError) throw profileError;
-    otherUser = (profile as UserSearchResult | null) ?? null;
-  }
+  const memberIds = [...new Set((memberRows ?? []).map(row => row.user_id))];
+  const profileResult = memberIds.length
+    ? await supabase.from('profiles').select('id,username,display_name,avatar_url').in('id', memberIds)
+    : { data: [], error: null };
+  if (profileResult.error) throw profileResult.error;
+
+  const members = (profileResult.data ?? []) as UserSearchResult[];
+  const otherUser = members.find(member => member.id !== user.id) ?? null;
   const title = conversation.is_group
     ? (conversation.title || 'Group chat')
     : (otherUser?.display_name || (otherUser ? '@' + otherUser.username : 'Direct message'));
-  return { ...conversation, title, other_user: otherUser } as ConversationDetails;
+  return {
+    ...conversation,
+    title,
+    other_user: otherUser,
+    members,
+    is_creator: conversation.created_by === user.id,
+  } as ConversationDetails;
 }
 
 export async function getConversationMessages(conversationId: string): Promise<ChatMessage[]> {
@@ -181,6 +187,43 @@ export async function createDirectConversation(otherUserId: string): Promise<str
   if (typeof data !== 'string' || !data) throw new Error('The chat could not be created.');
   return data;
 }
+
+export async function createGroupConversation(title: string, memberIds: string[]): Promise<string> {
+  const cleanTitle = title.trim();
+  if (!cleanTitle || cleanTitle.length > 60) {
+    throw new Error('Group name must be between 1 and 60 characters.');
+  }
+  const uniqueIds = [...new Set(memberIds.filter(Boolean))];
+  if (uniqueIds.length < 2) throw new Error('Choose at least two other people for a group.');
+  if (uniqueIds.length > 49) throw new Error('A group can have at most 50 members, including you.');
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+  const { data, error } = await supabase.rpc('create_group_conversation', {
+    group_title: cleanTitle,
+    member_ids: uniqueIds,
+  });
+  if (error) throw error;
+  if (typeof data !== 'string' || !data) throw new Error('The group could not be created.');
+  return data;
+}
+
+export async function addGroupConversationMembers(conversationId: string, memberIds: string[]): Promise<number> {
+  const uniqueIds = [...new Set(memberIds.filter(Boolean))];
+  if (uniqueIds.length === 0) throw new Error('Choose at least one person to add.');
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+  const { data, error } = await supabase.rpc('add_group_conversation_members', {
+    target_conversation_id: conversationId,
+    member_ids: uniqueIds,
+  });
+  if (error) throw error;
+  if (typeof data !== 'number' || !Number.isInteger(data) || data < 0) {
+    throw new Error('The group membership update returned an invalid result.');
+  }
+  return data;
+}
+
 
 export async function sendMessage(conversationId: string, body: string) {
   const text = body.trim();
