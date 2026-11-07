@@ -130,6 +130,7 @@ export default function Chats() {
             </Pressable>;
           }}
         />
+      }
       </> : <>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 8 }}>
         <Text style={{ color: muted, fontSize: 11, fontWeight: '800', letterSpacing: 1.5 }}>RECENT CHATS</Text>
