@@ -105,8 +105,8 @@ export default function GroupDetailsScreen() {
                   <Text style={{ color: white, fontWeight: '800' }}>{name}</Text>
                   <Text style={{ color: muted, fontSize: 12, marginTop: 3 }}>@{member.username}</Text>
                 </View>
-                {member.id === details?.members.find(person => person.id === member.id)?.id && member.id === details?.members[0]?.id && details?.is_creator
-                  ? <Text style={{ color: purple, fontSize: 10, fontWeight: '900' }}>MEMBER</Text>
+                {member.id === details?.created_by
+                  ? <Text style={{ color: purple, fontSize: 10, fontWeight: '900' }}>CREATOR</Text>
                   : null}
               </View>
             );
