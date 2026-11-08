@@ -1,7 +1,9 @@
 import { supabase } from './supabase';
 import type {
-  ChatMessage, ConversationDetails, ConversationSummary, UserSearchResult, VideoPost,
+  ChatMessage, ConversationDetails, ConversationSummary, MessageReadReceipt, UserSearchResult, VideoPost,
 } from './types';
+
+export const MESSAGE_PAGE_SIZE = 30;
 
 export async function getVideoFeed(limit = 20): Promise<VideoPost[]> {
   const { data: { user } } = await supabase.auth.getUser();
@@ -171,11 +173,45 @@ export async function getConversationDetails(conversationId: string): Promise<Co
   } as ConversationDetails;
 }
 
-export async function getConversationMessages(conversationId: string): Promise<ChatMessage[]> {
-  const { data, error } = await supabase.from('messages').select('*')
-    .eq('conversation_id', conversationId).order('created_at', { ascending: true }).limit(100);
+export async function getConversationMessages(
+  conversationId: string,
+  before?: Pick<ChatMessage, 'id' | 'created_at'>,
+  pageSize = MESSAGE_PAGE_SIZE,
+): Promise<ChatMessage[]> {
+  const limit = Math.max(1, Math.min(50, Math.floor(pageSize)));
+  let query = supabase.from('messages').select('*').eq('conversation_id', conversationId);
+  if (before) {
+    query = query.or(
+      'created_at.lt.' + before.created_at +
+      ',and(created_at.eq.' + before.created_at + ',id.lt.' + before.id + ')'
+    );
+  }
+  const { data, error } = await query
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(limit);
   if (error) throw error;
-  return (data ?? []) as ChatMessage[];
+  return ((data ?? []) as ChatMessage[]).reverse();
+}
+
+export async function getMessageReadReceipts(messageIds: string[]): Promise<MessageReadReceipt[]> {
+  const ids = [...new Set(messageIds.filter(Boolean))];
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase.from('message_reads')
+    .select('message_id,user_id,read_at').in('message_id', ids);
+  if (error) throw error;
+  return (data ?? []) as MessageReadReceipt[];
+}
+
+export async function markConversationMessagesRead(conversationId: string): Promise<number> {
+  const { data, error } = await supabase.rpc('mark_conversation_messages_read', {
+    target_conversation_id: conversationId,
+  });
+  if (error) throw error;
+  if (typeof data !== 'number' || !Number.isInteger(data) || data < 0) {
+    throw new Error('The read receipt update returned an invalid result.');
+  }
+  return data;
 }
 
 export async function createDirectConversation(otherUserId: string): Promise<string> {
@@ -224,7 +260,6 @@ export async function addGroupConversationMembers(conversationId: string, member
   return data;
 }
 
-
 export async function sendMessage(conversationId: string, body: string) {
   const text = body.trim();
   if (!text) throw new Error('Message cannot be empty.');
@@ -241,6 +276,17 @@ export function subscribeToMessages(conversationId: string, onMessage: (message:
   return supabase.channel('messages:' + conversationId)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'conversation_id=eq.' + conversationId },
       payload => onMessage(payload.new as ChatMessage))
+    .subscribe();
+}
+
+export function subscribeToMessageReadReceipts(
+  conversationId: string,
+  onReceipt: (receipt: MessageReadReceipt) => void,
+) {
+  // RLS limits visible rows to receipts owned by this user or receipts on their own messages.
+  return supabase.channel('message-reads:' + conversationId)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reads' },
+      payload => onReceipt(payload.new as MessageReadReceipt))
     .subscribe();
 }
 
