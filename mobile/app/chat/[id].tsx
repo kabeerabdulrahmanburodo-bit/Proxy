@@ -1,16 +1,33 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Platform, Pressable,
+  ActivityIndicator, Alert, AppState, FlatList, KeyboardAvoidingView, Platform, Pressable,
   Text, TextInput, View,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
-  getConversationDetails, getConversationMessages, sendMessage, subscribeToMessages,
+  getConversationDetails, getConversationMessages, getMessageReadReceipts, markConversationMessagesRead,
+  MESSAGE_PAGE_SIZE, sendMessage, subscribeToMessages, subscribeToMessageReadReceipts,
 } from '../../lib/social';
 import { supabase } from '../../lib/supabase';
-import type { ChatMessage, ConversationDetails } from '../../lib/types';
+import type { ChatMessage, ConversationDetails, MessageReadReceipt } from '../../lib/types';
 
 const purple = '#a78bfa', white = '#fafafa', muted = '#a1a1aa';
+
+function mergeReceipts(
+  current: Record<string, string[]>,
+  receipts: MessageReadReceipt[],
+  currentUserId: string,
+) {
+  const next = { ...current };
+  receipts.forEach(receipt => {
+    if (receipt.user_id === currentUserId) return;
+    const readers = next[receipt.message_id] ?? [];
+    if (!readers.includes(receipt.user_id)) {
+      next[receipt.message_id] = [...readers, receipt.user_id];
+    }
+  });
+  return next;
+}
 
 export default function ConversationScreen() {
   const params = useLocalSearchParams<{ id: string | string[] }>();
@@ -18,47 +35,140 @@ export default function ConversationScreen() {
   const router = useRouter();
   const [details, setDetails] = useState<ConversationDetails | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [readersByMessage, setReadersByMessage] = useState<Record<string, string[]>>({});
   const [userId, setUserId] = useState('');
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const userIdRef = useRef('');
+  const ownMessageIdsRef = useRef(new Set<string>());
+  const nearBottomRef = useRef(true);
+  const scrollToBottomRef = useRef(false);
 
   useEffect(() => {
-    if (!id) return;
+    if (!id) {
+      setLoading(false);
+      return;
+    }
     let active = true;
-    const channel = subscribeToMessages(id, incoming => {
-      setMessages(old => old.some(message => message.id === incoming.id) ? old : [...old, incoming]);
-    });
-    Promise.all([
-      getConversationDetails(id),
-      getConversationMessages(id),
-      supabase.auth.getUser(),
-    ]).then(([conversation, history, auth]) => {
-      if (!active) return;
-      setDetails(conversation);
+    const messageChannel = subscribeToMessages(id, incoming => {
+      const mine = incoming.sender_id === userIdRef.current;
+      if (mine) ownMessageIdsRef.current.add(incoming.id);
+      scrollToBottomRef.current = nearBottomRef.current || mine;
       setMessages(old => {
         const byId = new Map(old.map(message => [message.id, message]));
-        history.forEach(message => byId.set(message.id, message));
-        return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at));
+        byId.set(incoming.id, incoming);
+        return [...byId.values()].sort((a, b) =>
+          a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
+        );
       });
-      setUserId(auth.data.user?.id ?? '');
-    }).catch(error => {
-      if (active) Alert.alert('Conversation', error instanceof Error ? error.message : 'Could not load this chat.');
-    }).finally(() => {
-      if (active) setLoading(false);
+      if (!mine && AppState.currentState === 'active') {
+        void markConversationMessagesRead(id).catch(error =>
+          console.warn('Could not mark chat messages as read:', error)
+        );
+      }
     });
+    const receiptChannel = subscribeToMessageReadReceipts(id, receipt => {
+      if (!ownMessageIdsRef.current.has(receipt.message_id)) return;
+      setReadersByMessage(old => mergeReceipts(old, [receipt], userIdRef.current));
+    });
+    const appStateSubscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        void markConversationMessagesRead(id).catch(error =>
+          console.warn('Could not mark chat messages as read:', error)
+        );
+      }
+    });
+
+    void (async () => {
+      try {
+        const [conversation, history, auth] = await Promise.all([
+          getConversationDetails(id),
+          getConversationMessages(id),
+          supabase.auth.getUser(),
+        ]);
+        if (!active) return;
+        const currentUserId = auth.data.user?.id ?? '';
+        userIdRef.current = currentUserId;
+        setUserId(currentUserId);
+        setDetails(conversation);
+        ownMessageIdsRef.current = new Set(
+          history.filter(message => message.sender_id === currentUserId).map(message => message.id)
+        );
+        setMessages(old => {
+          const byId = new Map(history.map(message => [message.id, message]));
+          old.forEach(message => byId.set(message.id, message));
+          return [...byId.values()].sort((a, b) =>
+            a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
+          );
+        });
+        setHasMoreMessages(history.length === MESSAGE_PAGE_SIZE);
+        scrollToBottomRef.current = true;
+
+        try {
+          const receipts = await getMessageReadReceipts(history.map(message => message.id));
+          if (active) setReadersByMessage(old => mergeReceipts(old, receipts, currentUserId));
+        } catch (error) {
+          console.warn('Read receipts are unavailable until migration 0004 is applied:', error);
+        }
+        if (active && AppState.currentState === 'active') {
+          try {
+            await markConversationMessagesRead(id);
+          } catch (error) {
+            console.warn('Read receipts are unavailable until migration 0004 is applied:', error);
+          }
+        }
+      } catch (error) {
+        if (active) Alert.alert('Conversation', error instanceof Error ? error.message : 'Could not load this chat.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+
     return () => {
       active = false;
-      void supabase.removeChannel(channel);
+      appStateSubscription.remove();
+      void supabase.removeChannel(messageChannel);
+      void supabase.removeChannel(receiptChannel);
     };
   }, [id]);
+
+  async function loadOlderMessages() {
+    const oldest = messages[0];
+    if (!id || !oldest || !hasMoreMessages || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const older = await getConversationMessages(id, { id: oldest.id, created_at: oldest.created_at });
+      if (older.length < MESSAGE_PAGE_SIZE) setHasMoreMessages(false);
+      older.forEach(message => {
+        if (message.sender_id === userIdRef.current) ownMessageIdsRef.current.add(message.id);
+      });
+      setMessages(current => {
+        const byId = new Map(older.map(message => [message.id, message]));
+        current.forEach(message => byId.set(message.id, message));
+        return [...byId.values()].sort((a, b) =>
+          a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
+        );
+      });
+      const receipts = await getMessageReadReceipts(older.map(message => message.id));
+      setReadersByMessage(current => mergeReceipts(current, receipts, userIdRef.current));
+    } catch (error) {
+      Alert.alert('Messages', error instanceof Error ? error.message : 'Could not load earlier messages.');
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
 
   async function submit() {
     if (!id || !draft.trim() || sending) return;
     setSending(true);
     try {
       const created = await sendMessage(id, draft);
+      ownMessageIdsRef.current.add(created.id);
+      scrollToBottomRef.current = true;
       setMessages(old => old.some(message => message.id === created.id) ? old : [...old, created]);
       setDraft('');
     } catch (error) {
@@ -100,16 +210,38 @@ export default function ConversationScreen() {
         keyExtractor={message => message.id}
         contentContainerStyle={{ padding: 16, flexGrow: 1, justifyContent: 'flex-end' }}
         keyboardShouldPersistTaps="handled"
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+        maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
+        scrollEventThrottle={16}
+        onScroll={({ nativeEvent }) => {
+          const { contentOffset, contentSize, layoutMeasurement } = nativeEvent;
+          nearBottomRef.current = layoutMeasurement.height + contentOffset.y >= contentSize.height - 120;
+        }}
+        onContentSizeChange={() => {
+          if (scrollToBottomRef.current) {
+            scrollToBottomRef.current = false;
+            listRef.current?.scrollToEnd({ animated: true });
+          }
+        }}
+        ListHeaderComponent={hasMoreMessages || loadingOlder ? (
+          <Pressable onPress={() => void loadOlderMessages()} disabled={loadingOlder} style={{ alignItems: 'center', paddingVertical: 12 }}>
+            {loadingOlder
+              ? <ActivityIndicator color={purple} />
+              : <Text style={{ color: purple, fontSize: 11, fontWeight: '900' }}>LOAD EARLIER MESSAGES</Text>}
+          </Pressable>
+        ) : null}
         ListEmptyComponent={<View style={{ alignItems: 'center', marginTop: 50 }}>
           <Text style={{ color: white, fontWeight: '800', fontSize: 18 }}>Say hello.</Text>
           <Text style={{ color: muted, marginTop: 7 }}>Your conversation is ready.</Text>
         </View>}
         renderItem={({ item }) => {
           const mine = item.sender_id === userId;
+          const readers = readersByMessage[item.id] ?? [];
           return <View style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: '82%', backgroundColor: mine ? '#6d4fc3' : '#27272a', borderRadius: 17, borderBottomRightRadius: mine ? 5 : 17, borderBottomLeftRadius: mine ? 17 : 5, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 9 }}>
             <Text style={{ color: white, fontSize: 14, lineHeight: 20 }}>{item.body || 'Shared an attachment'}</Text>
             <Text style={{ color: '#ded6f3', opacity: 0.75, fontSize: 9, marginTop: 5, alignSelf: 'flex-end' }}>{new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+            {mine && readers.length > 0
+              ? <Text style={{ color: '#ded6f3', opacity: 0.9, fontSize: 9, marginTop: 3, alignSelf: 'flex-end' }}>{details?.is_group ? 'SEEN BY ' + readers.length : 'SEEN'}</Text>
+              : null}
           </View>;
         }}
       />
