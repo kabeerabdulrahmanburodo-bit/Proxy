@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { addGroupConversationMembers, getConversationDetails, leaveGroupConversation, removeGroupConversationMember, searchUsers } from '../../lib/social';
+import {
+  addGroupConversationMembers, getConversationDetails, leaveGroupConversation,
+  removeGroupConversationMember, searchUsers, transferGroupConversationOwnership,
+} from '../../lib/social';
 import type { ConversationDetails, UserSearchResult } from '../../lib/types';
 
 const purple = '#a78bfa', white = '#fafafa', muted = '#a1a1aa';
@@ -18,6 +21,7 @@ export default function GroupDetailsScreen() {
   const [searchBusy, setSearchBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
+  const [transferringToId, setTransferringToId] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -89,7 +93,7 @@ export default function GroupDetailsScreen() {
   }
 
   async function removeMember(memberId: string) {
-    if (!id || saving || removingMemberId || leaving) return;
+    if (!id || saving || removingMemberId || transferringToId || leaving) return;
     setRemovingMemberId(memberId);
     try {
       await removeGroupConversationMember(id, memberId);
@@ -99,6 +103,31 @@ export default function GroupDetailsScreen() {
       Alert.alert('Remove member', error instanceof Error ? error.message : 'Could not remove this member.');
     } finally {
       setRemovingMemberId(null);
+    }
+  }
+
+  function confirmTransferOwnership(memberId: string, memberName: string) {
+    Alert.alert(
+      'Transfer group ownership?',
+      memberName + ' will become the group creator. You will remain a member and can leave afterward.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Transfer ownership', onPress: () => { void transferOwnership(memberId, memberName); } },
+      ],
+    );
+  }
+
+  async function transferOwnership(memberId: string, memberName: string) {
+    if (!id || saving || removingMemberId || transferringToId || leaving) return;
+    setTransferringToId(memberId);
+    try {
+      await transferGroupConversationOwnership(id, memberId);
+      await load();
+      Alert.alert('Ownership transferred', memberName + ' is now the group creator. You can leave the group whenever you are ready.');
+    } catch (error) {
+      Alert.alert('Transfer ownership', error instanceof Error ? error.message : 'Could not transfer group ownership.');
+    } finally {
+      setTransferringToId(null);
     }
   }
 
@@ -117,7 +146,7 @@ export default function GroupDetailsScreen() {
   }
 
   async function leaveGroup() {
-    if (!id || leaving || removingMemberId || saving) return;
+    if (!id || leaving || removingMemberId || transferringToId || saving) return;
     setLeaving(true);
     try {
       await leaveGroupConversation(id);
@@ -146,6 +175,7 @@ export default function GroupDetailsScreen() {
           <Text style={{ color: muted, fontSize: 11, fontWeight: '800', letterSpacing: 1.3, marginBottom: 8 }}>MEMBERS</Text>
           {(details?.members ?? []).map(member => {
             const name = member.display_name || member.username;
+            const isCurrentCreator = member.id === details?.created_by;
             return (
               <View key={member.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: '#27272a' }}>
                 <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#302844', alignItems: 'center', justifyContent: 'center' }}>
@@ -155,18 +185,29 @@ export default function GroupDetailsScreen() {
                   <Text style={{ color: white, fontWeight: '800' }}>{name}</Text>
                   <Text style={{ color: muted, fontSize: 12, marginTop: 3 }}>@{member.username}</Text>
                 </View>
-                {member.id === details?.created_by
+                {isCurrentCreator
                   ? <Text style={{ color: purple, fontSize: 10, fontWeight: '900' }}>CREATOR</Text>
                   : details?.is_creator ? (
-                    <Pressable
-                      onPress={() => confirmRemoveMember(member.id, name)}
-                      disabled={saving || leaving || removingMemberId !== null}
-                      style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 9, backgroundColor: '#3f2028', marginLeft: 8 }}
-                    >
-                      <Text style={{ color: '#fda4af', fontSize: 10, fontWeight: '900' }}>
-                        {removingMemberId === member.id ? 'REMOVING…' : 'REMOVE'}
-                      </Text>
-                    </Pressable>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginLeft: 6 }}>
+                      <Pressable
+                        onPress={() => confirmTransferOwnership(member.id, name)}
+                        disabled={saving || leaving || removingMemberId !== null || transferringToId !== null}
+                        style={{ paddingHorizontal: 9, paddingVertical: 8, borderRadius: 9, backgroundColor: '#302844' }}
+                      >
+                        <Text style={{ color: purple, fontSize: 9, fontWeight: '900' }}>
+                          {transferringToId === member.id ? 'TRANSFERRING…' : 'TRANSFER'}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => confirmRemoveMember(member.id, name)}
+                        disabled={saving || leaving || removingMemberId !== null || transferringToId !== null}
+                        style={{ paddingHorizontal: 9, paddingVertical: 8, borderRadius: 9, backgroundColor: '#3f2028' }}
+                      >
+                        <Text style={{ color: '#fda4af', fontSize: 9, fontWeight: '900' }}>
+                          {removingMemberId === member.id ? 'REMOVING…' : 'REMOVE'}
+                        </Text>
+                      </Pressable>
+                    </View>
                   ) : null}
               </View>
             );
@@ -203,23 +244,28 @@ export default function GroupDetailsScreen() {
                   {query.trim().length >= 2 && !searchBusy && people.length === 0 ? <Text style={{ color: muted, marginTop: 10, fontSize: 12 }}>No new people found.</Text> : null}
                 </View>
               )}
-              <Pressable onPress={() => void addMembers()} disabled={saving || selectedIds.length === 0 || removingMemberId !== null || leaving} style={{ backgroundColor: saving || selectedIds.length === 0 ? '#4c3d6d' : purple, padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 20 }}>
+              <Pressable onPress={() => void addMembers()} disabled={saving || selectedIds.length === 0 || removingMemberId !== null || transferringToId !== null || leaving} style={{ backgroundColor: saving || selectedIds.length === 0 ? '#4c3d6d' : purple, padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 20 }}>
                 {saving ? <ActivityIndicator color="#181024" /> : <Text style={{ color: '#181024', fontWeight: '900' }}>ADD {selectedIds.length || ''} MEMBERS</Text>}
               </Pressable>
               {details?.members.length === 1 ? (
-                <Pressable onPress={confirmLeaveGroup} disabled={leaving || saving || removingMemberId !== null} style={{ backgroundColor: '#3f2028', padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 12 }}>
+                <Pressable onPress={confirmLeaveGroup} disabled={leaving || saving || removingMemberId !== null || transferringToId !== null} style={{ backgroundColor: '#3f2028', padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 12 }}>
                   {leaving ? <ActivityIndicator color="#fda4af" /> : <Text style={{ color: '#fda4af', fontWeight: '900' }}>DELETE GROUP</Text>}
                 </Pressable>
               ) : (
-                <Text style={{ color: muted, fontSize: 12, lineHeight: 20, marginTop: 14 }}>
-                  As creator, you can remove members. Leaving a group with other members will require ownership transfer, which is not available yet.
-                </Text>
+                <>
+                  <Text style={{ color: muted, fontSize: 12, lineHeight: 20, marginTop: 14 }}>
+                    Transfer ownership to another member before leaving. The new creator will control member additions and removals.
+                  </Text>
+                  <Pressable onPress={confirmLeaveGroup} disabled={leaving || saving || removingMemberId !== null || transferringToId !== null} style={{ backgroundColor: '#3f2028', padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 12 }}>
+                    {leaving ? <ActivityIndicator color="#fda4af" /> : <Text style={{ color: '#fda4af', fontWeight: '900' }}>LEAVE GROUP</Text>}
+                  </Pressable>
+                </>
               )}
             </>
           ) : (
             <View style={{ marginTop: 24 }}>
               <Text style={{ color: muted, fontSize: 12, lineHeight: 20 }}>Only the group creator can add or remove other members.</Text>
-              <Pressable onPress={confirmLeaveGroup} disabled={leaving || saving || removingMemberId !== null} style={{ backgroundColor: '#3f2028', padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 18 }}>
+              <Pressable onPress={confirmLeaveGroup} disabled={leaving || saving || removingMemberId !== null || transferringToId !== null} style={{ backgroundColor: '#3f2028', padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 18 }}>
                 {leaving ? <ActivityIndicator color="#fda4af" /> : <Text style={{ color: '#fda4af', fontWeight: '900' }}>LEAVE GROUP</Text>}
               </Pressable>
             </View>
