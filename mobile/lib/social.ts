@@ -276,6 +276,12 @@ export async function removeGroupConversationMember(
   if (data !== true) throw new Error('The group membership change was not confirmed.');
 }
 
+export async function leaveGroupConversation(conversationId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+  await removeGroupConversationMember(conversationId, user.id);
+}
+
 export async function sendMessage(conversationId: string, body: string) {
   const text = body.trim();
   if (!text) throw new Error('Message cannot be empty.');
