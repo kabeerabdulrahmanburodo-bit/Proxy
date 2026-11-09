@@ -276,6 +276,23 @@ export async function removeGroupConversationMember(
   if (data !== true) throw new Error('The group membership change was not confirmed.');
 }
 
+export async function transferGroupConversationOwnership(
+  conversationId: string,
+  newOwnerId: string,
+): Promise<void> {
+  if (!conversationId || !newOwnerId) throw new Error('A group and new creator are required.');
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in first.');
+  if (newOwnerId === user.id) throw new Error('Choose another group member.');
+
+  const { data, error } = await supabase.rpc('transfer_group_conversation_ownership', {
+    target_conversation_id: conversationId,
+    new_owner_id: newOwnerId,
+  });
+  if (error) throw error;
+  if (data !== true) throw new Error('The group ownership transfer was not confirmed.');
+}
+
 export async function leaveGroupConversation(conversationId: string): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sign in first.');
