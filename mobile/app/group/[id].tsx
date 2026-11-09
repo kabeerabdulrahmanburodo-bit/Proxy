@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { addGroupConversationMembers, getConversationDetails, searchUsers } from '../../lib/social';
+import { addGroupConversationMembers, getConversationDetails, leaveGroupConversation, removeGroupConversationMember, searchUsers } from '../../lib/social';
 import type { ConversationDetails, UserSearchResult } from '../../lib/types';
 
 const purple = '#a78bfa', white = '#fafafa', muted = '#a1a1aa';
@@ -17,6 +17,8 @@ export default function GroupDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [searchBusy, setSearchBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -79,6 +81,54 @@ export default function GroupDetailsScreen() {
     }
   }
 
+  function confirmRemoveMember(memberId: string, memberName: string) {
+    Alert.alert('Remove member?', 'Remove ' + memberName + ' from this group?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => { void removeMember(memberId); } },
+    ]);
+  }
+
+  async function removeMember(memberId: string) {
+    if (!id || saving || removingMemberId || leaving) return;
+    setRemovingMemberId(memberId);
+    try {
+      await removeGroupConversationMember(id, memberId);
+      await load();
+      Alert.alert('Group updated', 'The member has been removed.');
+    } catch (error) {
+      Alert.alert('Remove member', error instanceof Error ? error.message : 'Could not remove this member.');
+    } finally {
+      setRemovingMemberId(null);
+    }
+  }
+
+  function confirmLeaveGroup() {
+    const deleting = details?.is_creator === true;
+    Alert.alert(
+      deleting ? 'Delete group?' : 'Leave group?',
+      deleting
+        ? 'This will permanently delete the group and its messages because you are the only member.'
+        : 'You will no longer see this group or its messages.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: deleting ? 'Delete group' : 'Leave group', style: 'destructive', onPress: () => { void leaveGroup(); } },
+      ],
+    );
+  }
+
+  async function leaveGroup() {
+    if (!id || leaving || removingMemberId || saving) return;
+    setLeaving(true);
+    try {
+      await leaveGroupConversation(id);
+      router.replace('/(tabs)/chats');
+    } catch (error) {
+      Alert.alert('Group', error instanceof Error ? error.message : 'Could not leave this group.');
+    } finally {
+      setLeaving(false);
+    }
+  }
+
   return (
     <View style={{ flex: 1, backgroundColor: '#09090b', paddingTop: 56 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 18 }}>
@@ -107,7 +157,17 @@ export default function GroupDetailsScreen() {
                 </View>
                 {member.id === details?.created_by
                   ? <Text style={{ color: purple, fontSize: 10, fontWeight: '900' }}>CREATOR</Text>
-                  : null}
+                  : details?.is_creator ? (
+                    <Pressable
+                      onPress={() => confirmRemoveMember(member.id, name)}
+                      disabled={saving || leaving || removingMemberId !== null}
+                      style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 9, backgroundColor: '#3f2028', marginLeft: 8 }}
+                    >
+                      <Text style={{ color: '#fda4af', fontSize: 10, fontWeight: '900' }}>
+                        {removingMemberId === member.id ? 'REMOVING…' : 'REMOVE'}
+                      </Text>
+                    </Pressable>
+                  ) : null}
               </View>
             );
           })}
@@ -143,12 +203,26 @@ export default function GroupDetailsScreen() {
                   {query.trim().length >= 2 && !searchBusy && people.length === 0 ? <Text style={{ color: muted, marginTop: 10, fontSize: 12 }}>No new people found.</Text> : null}
                 </View>
               )}
-              <Pressable onPress={() => void addMembers()} disabled={saving || selectedIds.length === 0} style={{ backgroundColor: saving || selectedIds.length === 0 ? '#4c3d6d' : purple, padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 20 }}>
+              <Pressable onPress={() => void addMembers()} disabled={saving || selectedIds.length === 0 || removingMemberId !== null || leaving} style={{ backgroundColor: saving || selectedIds.length === 0 ? '#4c3d6d' : purple, padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 20 }}>
                 {saving ? <ActivityIndicator color="#181024" /> : <Text style={{ color: '#181024', fontWeight: '900' }}>ADD {selectedIds.length || ''} MEMBERS</Text>}
               </Pressable>
+              {details?.members.length === 1 ? (
+                <Pressable onPress={confirmLeaveGroup} disabled={leaving || saving || removingMemberId !== null} style={{ backgroundColor: '#3f2028', padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 12 }}>
+                  {leaving ? <ActivityIndicator color="#fda4af" /> : <Text style={{ color: '#fda4af', fontWeight: '900' }}>DELETE GROUP</Text>}
+                </Pressable>
+              ) : (
+                <Text style={{ color: muted, fontSize: 12, lineHeight: 20, marginTop: 14 }}>
+                  As creator, you can remove members. Leaving a group with other members will require ownership transfer, which is not available yet.
+                </Text>
+              )}
             </>
           ) : (
-            <Text style={{ color: muted, fontSize: 12, lineHeight: 20, marginTop: 24 }}>Only the group creator can add members in this version.</Text>
+            <View style={{ marginTop: 24 }}>
+              <Text style={{ color: muted, fontSize: 12, lineHeight: 20 }}>Only the group creator can add or remove other members.</Text>
+              <Pressable onPress={confirmLeaveGroup} disabled={leaving || saving || removingMemberId !== null} style={{ backgroundColor: '#3f2028', padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 18 }}>
+                {leaving ? <ActivityIndicator color="#fda4af" /> : <Text style={{ color: '#fda4af', fontWeight: '900' }}>LEAVE GROUP</Text>}
+              </Pressable>
+            </View>
           )}
         </ScrollView>
       )}
