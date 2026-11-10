@@ -348,6 +348,7 @@ export function subscribeToConversationPresence(
       const previous = byUser.get(entry.user_id);
       byUser.set(entry.user_id, {
         user_id: entry.user_id,
+        online: Boolean(entry.online || previous?.online),
         typing: Boolean(entry.typing || previous?.typing),
       });
     });
@@ -358,7 +359,7 @@ export function subscribeToConversationPresence(
     .on('presence', { event: 'sync' }, publishPresence)
     .subscribe(async status => {
       if (status === 'SUBSCRIBED') {
-        const result = await channel.track({ user_id: userId, typing: false });
+        const result = await channel.track({ user_id: userId, online: true, typing: false });
         if (result !== 'ok') console.warn('Could not publish chat presence:', result);
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
         console.warn('Chat presence channel unavailable:', status);
@@ -373,8 +374,17 @@ export async function trackConversationTyping(
   userId: string,
   typing: boolean,
 ) {
-  const result = await channel.track({ user_id: userId, typing });
+  const result = await channel.track({ user_id: userId, online: true, typing });
   if (result !== 'ok') console.warn('Could not update typing status:', result);
+}
+
+export async function trackConversationOnline(
+  channel: ReturnType<typeof supabase.channel>,
+  userId: string,
+  online: boolean,
+) {
+  const result = await channel.track({ user_id: userId, online, typing: false });
+  if (result !== 'ok') console.warn('Could not update online status:', result);
 }
 
 export async function createSnap(mediaUrl: string, mediaType: 'image' | 'video', lifetimeHours = 24) {
