@@ -14,6 +14,10 @@ export type ChatMessage = {
 export type MessageReadReceipt = {
   message_id: string; user_id: string; read_at: string;
 };
+export type ConversationPresence = {
+  user_id: string;
+  typing: boolean;
+};
 export type UserSearchResult = Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_url'>;
 export type ConversationSummary = {
   id: string;
