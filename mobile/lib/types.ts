@@ -16,6 +16,7 @@ export type MessageReadReceipt = {
 };
 export type ConversationPresence = {
   user_id: string;
+  online: boolean;
   typing: boolean;
 };
 export type UserSearchResult = Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_url'>;
