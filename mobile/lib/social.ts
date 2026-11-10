@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import type {
-  ChatMessage, ConversationDetails, ConversationSummary, MessageReadReceipt, UserSearchResult, VideoPost,
+  ChatMessage, ConversationDetails, ConversationPresence, ConversationSummary, MessageReadReceipt,
+  UserSearchResult, VideoPost,
 } from './types';
 
 export const MESSAGE_PAGE_SIZE = 30;
@@ -327,6 +328,53 @@ export function subscribeToMessageReadReceipts(
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reads' },
       payload => onReceipt(payload.new as MessageReadReceipt))
     .subscribe();
+}
+
+export function subscribeToConversationPresence(
+  conversationId: string,
+  userId: string,
+  onPresence: (presence: ConversationPresence[]) => void,
+) {
+  const channel = supabase.channel('proxy-chat:' + conversationId, {
+    config: { private: true, presence: { key: userId } },
+  });
+
+  const publishPresence = () => {
+    const entries: ConversationPresence[] = [];
+    Object.values(channel.presenceState<ConversationPresence>()).forEach(values => entries.push(...values));
+    const byUser = new Map<string, ConversationPresence>();
+    entries.forEach(entry => {
+      if (!entry.user_id) return;
+      const previous = byUser.get(entry.user_id);
+      byUser.set(entry.user_id, {
+        user_id: entry.user_id,
+        typing: Boolean(entry.typing || previous?.typing),
+      });
+    });
+    onPresence([...byUser.values()]);
+  };
+
+  channel
+    .on('presence', { event: 'sync' }, publishPresence)
+    .subscribe(async status => {
+      if (status === 'SUBSCRIBED') {
+        const result = await channel.track({ user_id: userId, typing: false });
+        if (result !== 'ok') console.warn('Could not publish chat presence:', result);
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('Chat presence channel unavailable:', status);
+      }
+    });
+
+  return channel;
+}
+
+export async function trackConversationTyping(
+  channel: ReturnType<typeof supabase.channel>,
+  userId: string,
+  typing: boolean,
+) {
+  const result = await channel.track({ user_id: userId, typing });
+  if (result !== 'ok') console.warn('Could not update typing status:', result);
 }
 
 export async function createSnap(mediaUrl: string, mediaType: 'image' | 'video', lifetimeHours = 24) {
