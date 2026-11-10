@@ -6,10 +6,11 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   getConversationDetails, getConversationMessages, getMessageReadReceipts, markConversationMessagesRead,
-  MESSAGE_PAGE_SIZE, sendMessage, subscribeToMessages, subscribeToMessageReadReceipts,
+  MESSAGE_PAGE_SIZE, sendMessage, subscribeToConversationPresence, subscribeToMessages,
+  subscribeToMessageReadReceipts, trackConversationTyping,
 } from '../../lib/social';
 import { supabase } from '../../lib/supabase';
-import type { ChatMessage, ConversationDetails, MessageReadReceipt } from '../../lib/types';
+import type { ChatMessage, ConversationDetails, ConversationPresence, MessageReadReceipt } from '../../lib/types';
 
 const purple = '#a78bfa', white = '#fafafa', muted = '#a1a1aa';
 
@@ -36,6 +37,8 @@ export default function ConversationScreen() {
   const [details, setDetails] = useState<ConversationDetails | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [readersByMessage, setReadersByMessage] = useState<Record<string, string[]>>({});
+  const [presence, setPresence] = useState<ConversationPresence[]>([]);
+  const [presenceReady, setPresenceReady] = useState(false);
   const [userId, setUserId] = useState('');
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
@@ -47,6 +50,9 @@ export default function ConversationScreen() {
   const ownMessageIdsRef = useRef(new Set<string>());
   const nearBottomRef = useRef(true);
   const scrollToBottomRef = useRef(false);
+  const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isTypingRef = useRef(false);
 
   useEffect(() => {
     if (!id) {
@@ -54,6 +60,10 @@ export default function ConversationScreen() {
       return;
     }
     let active = true;
+    let presenceChannel: ReturnType<typeof supabase.channel> | null = null;
+    setPresence([]);
+    setPresenceReady(false);
+
     const messageChannel = subscribeToMessages(id, incoming => {
       const mine = incoming.sender_id === userIdRef.current;
       if (mine) ownMessageIdsRef.current.add(incoming.id);
@@ -80,6 +90,12 @@ export default function ConversationScreen() {
         void markConversationMessagesRead(id).catch(error =>
           console.warn('Could not mark chat messages as read:', error)
         );
+      } else if (nextState !== 'active' && isTypingRef.current) {
+        isTypingRef.current = false;
+        const channel = presenceChannelRef.current;
+        if (channel && userIdRef.current) {
+          void trackConversationTyping(channel, userIdRef.current, false);
+        }
       }
     });
 
@@ -108,6 +124,16 @@ export default function ConversationScreen() {
         setHasMoreMessages(history.length === MESSAGE_PAGE_SIZE);
         scrollToBottomRef.current = true;
 
+        if (currentUserId) {
+          presenceChannel = subscribeToConversationPresence(id, currentUserId, users => {
+            if (active) {
+              setPresence(users);
+              setPresenceReady(true);
+            }
+          });
+          presenceChannelRef.current = presenceChannel;
+        }
+
         try {
           const receipts = await getMessageReadReceipts(history.map(message => message.id));
           if (active) setReadersByMessage(old => mergeReceipts(old, receipts, currentUserId));
@@ -130,11 +156,52 @@ export default function ConversationScreen() {
 
     return () => {
       active = false;
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+      isTypingRef.current = false;
+      if (presenceChannelRef.current === presenceChannel) presenceChannelRef.current = null;
       appStateSubscription.remove();
       void supabase.removeChannel(messageChannel);
       void supabase.removeChannel(receiptChannel);
+      if (presenceChannel) void supabase.removeChannel(presenceChannel);
     };
   }, [id]);
+
+  function stopTyping() {
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = null;
+    if (!isTypingRef.current) return;
+    isTypingRef.current = false;
+    const channel = presenceChannelRef.current;
+    if (channel && userIdRef.current) {
+      void trackConversationTyping(channel, userIdRef.current, false);
+    }
+  }
+
+  function updateDraft(value: string) {
+    setDraft(value);
+    const channel = presenceChannelRef.current;
+    const currentUserId = userIdRef.current;
+    if (!channel || !currentUserId) return;
+
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    if (value.trim()) {
+      if (!isTypingRef.current) {
+        isTypingRef.current = true;
+        void trackConversationTyping(channel, currentUserId, true);
+      }
+      typingTimeoutRef.current = setTimeout(() => {
+        typingTimeoutRef.current = null;
+        if (isTypingRef.current) {
+          isTypingRef.current = false;
+          const activeChannel = presenceChannelRef.current;
+          if (activeChannel) void trackConversationTyping(activeChannel, currentUserId, false);
+        }
+      }, 1600);
+    } else {
+      stopTyping();
+    }
+  }
 
   async function loadOlderMessages() {
     const oldest = messages[0];
@@ -164,6 +231,7 @@ export default function ConversationScreen() {
 
   async function submit() {
     if (!id || !draft.trim() || sending) return;
+    stopTyping();
     setSending(true);
     try {
       const created = await sendMessage(id, draft);
@@ -179,6 +247,23 @@ export default function ConversationScreen() {
   }
 
   const title = details?.title || 'Conversation';
+  const peerPresence = presence.filter(member => member.user_id !== userId);
+  const onlineCount = new Set(presence.map(member => member.user_id)).size;
+  const typingMembers = peerPresence.filter(member => member.typing);
+  const typingNames = typingMembers.map(member => {
+    const profile = details?.members.find(candidate => candidate.id === member.user_id);
+    return profile?.display_name || (profile ? '@' + profile.username : 'Someone');
+  });
+  const typingLabel = typingNames.length === 0
+    ? ''
+    : !details?.is_group
+      ? 'Typing…'
+      : typingNames.length === 1
+        ? typingNames[0] + ' is typing…'
+        : typingNames.length === 2
+          ? typingNames[0] + ' and ' + typingNames[1] + ' are typing…'
+          : typingNames.length + ' people are typing…';
+  const peerOnline = peerPresence.length > 0;
 
   return <KeyboardAvoidingView
     behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -191,10 +276,15 @@ export default function ConversationScreen() {
       <View style={{ flex: 1 }}>
         <Text style={{ color: white, fontSize: 16, fontWeight: '900' }} numberOfLines={1}>{title}</Text>
         {details?.is_group
-          ? <Text style={{ color: muted, marginTop: 3, fontSize: 11 }}>GROUP · {details.members.length} MEMBERS</Text>
+          ? <Text style={{ color: muted, marginTop: 3, fontSize: 11 }}>
+              GROUP · {details.members.length} MEMBERS · {presenceReady ? onlineCount + ' ONLINE' : 'CONNECTING'}
+            </Text>
           : details?.other_user?.username
-            ? <Text style={{ color: muted, marginTop: 3, fontSize: 11 }}>@{details.other_user.username}</Text>
+            ? <Text style={{ color: muted, marginTop: 3, fontSize: 11 }}>
+                @{details.other_user.username} · {presenceReady ? peerOnline ? 'ONLINE' : 'OFFLINE' : 'CONNECTING'}
+              </Text>
             : null}
+        {typingLabel ? <Text style={{ color: purple, marginTop: 4, fontSize: 11, fontWeight: '700' }}>{typingLabel}</Text> : null}
       </View>
       {details?.is_group ? (
         <Pressable onPress={() => router.push({ pathname: '/group/[id]', params: { id: id ?? '' } })} style={{ paddingHorizontal: 10, paddingVertical: 8 }}>
@@ -250,7 +340,7 @@ export default function ConversationScreen() {
     <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 9, padding: 13, paddingBottom: 18, borderTopWidth: 1, borderTopColor: '#27272a' }}>
       <TextInput
         value={draft}
-        onChangeText={setDraft}
+        onChangeText={updateDraft}
         placeholder="Write a message…"
         placeholderTextColor="#71717a"
         multiline
