@@ -7,7 +7,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   getConversationDetails, getConversationMessages, getMessageReadReceipts, markConversationMessagesRead,
   MESSAGE_PAGE_SIZE, sendMessage, subscribeToConversationPresence, subscribeToMessages,
-  subscribeToMessageReadReceipts, trackConversationTyping,
+  subscribeToMessageReadReceipts, trackConversationOnline, trackConversationTyping,
 } from '../../lib/social';
 import { supabase } from '../../lib/supabase';
 import type { ChatMessage, ConversationDetails, ConversationPresence, MessageReadReceipt } from '../../lib/types';
@@ -86,15 +86,21 @@ export default function ConversationScreen() {
       setReadersByMessage(old => mergeReceipts(old, [receipt], userIdRef.current));
     });
     const appStateSubscription = AppState.addEventListener('change', nextState => {
+      const channel = presenceChannelRef.current;
+      const currentUserId = userIdRef.current;
       if (nextState === 'active') {
         void markConversationMessagesRead(id).catch(error =>
           console.warn('Could not mark chat messages as read:', error)
         );
-      } else if (nextState !== 'active' && isTypingRef.current) {
+        if (channel && currentUserId) {
+          void trackConversationOnline(channel, currentUserId, true);
+        }
+      } else {
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
         isTypingRef.current = false;
-        const channel = presenceChannelRef.current;
-        if (channel && userIdRef.current) {
-          void trackConversationTyping(channel, userIdRef.current, false);
+        if (channel && currentUserId) {
+          void trackConversationOnline(channel, currentUserId, false);
         }
       }
     });
@@ -247,8 +253,9 @@ export default function ConversationScreen() {
   }
 
   const title = details?.title || 'Conversation';
-  const peerPresence = presence.filter(member => member.user_id !== userId);
-  const onlineCount = new Set(presence.map(member => member.user_id)).size;
+  const onlinePresence = presence.filter(member => member.online);
+  const peerPresence = onlinePresence.filter(member => member.user_id !== userId);
+  const onlineCount = new Set(onlinePresence.map(member => member.user_id)).size;
   const typingMembers = peerPresence.filter(member => member.typing);
   const typingNames = typingMembers.map(member => {
     const profile = details?.members.find(candidate => candidate.id === member.user_id);
