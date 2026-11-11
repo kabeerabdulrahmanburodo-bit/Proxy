@@ -1,18 +1,40 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, AppState, FlatList, KeyboardAvoidingView, Platform, Pressable,
+  ActivityIndicator, Alert, AppState, FlatList, Image, KeyboardAvoidingView, Platform, Pressable,
   Text, TextInput, View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   getConversationDetails, getConversationMessages, getMessageReadReceipts, markConversationMessagesRead,
   MESSAGE_PAGE_SIZE, sendMessage, subscribeToConversationPresence, subscribeToMessages,
   subscribeToMessageReadReceipts, trackConversationOnline, trackConversationTyping,
 } from '../../lib/social';
+import { resolveChatMessageAttachment, resolveChatMessageAttachments, sendChatAttachment } from '../../lib/chat-media';
 import { supabase } from '../../lib/supabase';
 import type { ChatMessage, ConversationDetails, ConversationPresence, MessageReadReceipt } from '../../lib/types';
 
 const purple = '#a78bfa', white = '#fafafa', muted = '#a1a1aa';
+
+function ChatVideoAttachment({ uri }: { uri: string }) {
+  const player = useVideoPlayer(uri, instance => { instance.loop = false; });
+  return <VideoView
+    player={player}
+    style={{ width: 236, height: 300, borderRadius: 12, overflow: 'hidden' }}
+    nativeControls
+    contentFit="contain"
+  />;
+}
+
+function ChatAttachment({ uri, mediaType }: { uri: string; mediaType: 'image' | 'video' | null }) {
+  if (mediaType === 'video') return <ChatVideoAttachment uri={uri} />;
+  return <Image
+    source={{ uri }}
+    style={{ width: 236, height: 236, borderRadius: 12, backgroundColor: '#09090b' }}
+    resizeMode="cover"
+  />;
+}
 
 function mergeReceipts(
   current: Record<string, string[]>,
@@ -65,21 +87,24 @@ export default function ConversationScreen() {
     setPresenceReady(false);
 
     const messageChannel = subscribeToMessages(id, incoming => {
-      const mine = incoming.sender_id === userIdRef.current;
-      if (mine) ownMessageIdsRef.current.add(incoming.id);
-      scrollToBottomRef.current = nearBottomRef.current || mine;
-      setMessages(old => {
-        const byId = new Map(old.map(message => [message.id, message]));
-        byId.set(incoming.id, incoming);
-        return [...byId.values()].sort((a, b) =>
-          a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
-        );
+      void resolveChatMessageAttachment(incoming).then(resolved => {
+        if (!active) return;
+        const mine = resolved.sender_id === userIdRef.current;
+        if (mine) ownMessageIdsRef.current.add(resolved.id);
+        scrollToBottomRef.current = nearBottomRef.current || mine;
+        setMessages(old => {
+          const byId = new Map(old.map(message => [message.id, message]));
+          byId.set(resolved.id, resolved);
+          return [...byId.values()].sort((a, b) =>
+            a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
+          );
+        });
+        if (!mine && AppState.currentState === 'active') {
+          void markConversationMessagesRead(id).catch(error =>
+            console.warn('Could not mark chat messages as read:', error)
+          );
+        }
       });
-      if (!mine && AppState.currentState === 'active') {
-        void markConversationMessagesRead(id).catch(error =>
-          console.warn('Could not mark chat messages as read:', error)
-        );
-      }
     });
     const receiptChannel = subscribeToMessageReadReceipts(id, receipt => {
       if (!ownMessageIdsRef.current.has(receipt.message_id)) return;
@@ -107,11 +132,13 @@ export default function ConversationScreen() {
 
     void (async () => {
       try {
-        const [conversation, history, auth] = await Promise.all([
+        const [conversation, rawHistory, auth] = await Promise.all([
           getConversationDetails(id),
           getConversationMessages(id),
           supabase.auth.getUser(),
         ]);
+        if (!active) return;
+        const history = await resolveChatMessageAttachments(rawHistory);
         if (!active) return;
         const currentUserId = auth.data.user?.id ?? '';
         userIdRef.current = currentUserId;
@@ -127,7 +154,7 @@ export default function ConversationScreen() {
             a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
           );
         });
-        setHasMoreMessages(history.length === MESSAGE_PAGE_SIZE);
+        setHasMoreMessages(rawHistory.length === MESSAGE_PAGE_SIZE);
         scrollToBottomRef.current = true;
 
         if (currentUserId) {
@@ -141,7 +168,7 @@ export default function ConversationScreen() {
         }
 
         try {
-          const receipts = await getMessageReadReceipts(history.map(message => message.id));
+          const receipts = await getMessageReadReceipts(rawHistory.map(message => message.id));
           if (active) setReadersByMessage(old => mergeReceipts(old, receipts, currentUserId));
         } catch (error) {
           console.warn('Read receipts are unavailable until migration 0004 is applied:', error);
@@ -219,8 +246,9 @@ export default function ConversationScreen() {
       older.forEach(message => {
         if (message.sender_id === userIdRef.current) ownMessageIdsRef.current.add(message.id);
       });
+      const resolvedOlder = await resolveChatMessageAttachments(older);
       setMessages(current => {
-        const byId = new Map(older.map(message => [message.id, message]));
+        const byId = new Map(resolvedOlder.map(message => [message.id, message]));
         current.forEach(message => byId.set(message.id, message));
         return [...byId.values()].sort((a, b) =>
           a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
@@ -247,6 +275,47 @@ export default function ConversationScreen() {
       setDraft('');
     } catch (error) {
       Alert.alert('Message', error instanceof Error ? error.message : 'Unable to send your message.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function pickAttachment() {
+    if (!id || sending) return;
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Photo access', 'Allow photo library access to share an image or video.');
+      return;
+    }
+
+    const selection = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images', 'videos'],
+      allowsEditing: false,
+      quality: 0.85,
+      videoMaxDuration: 180,
+    });
+    if (selection.canceled || !selection.assets[0]) return;
+
+    const asset = selection.assets[0];
+    const mediaType: 'image' | 'video' =
+      asset.type === 'video' || asset.mimeType?.startsWith('video/') ? 'video' : 'image';
+
+    setSending(true);
+    stopTyping();
+    try {
+      const created = await sendChatAttachment(
+        id,
+        asset.uri,
+        asset.fileName,
+        asset.mimeType,
+        mediaType,
+        asset.fileSize,
+      );
+      ownMessageIdsRef.current.add(created.id);
+      scrollToBottomRef.current = true;
+      setMessages(old => old.some(message => message.id === created.id) ? old : [...old, created]);
+    } catch (error) {
+      Alert.alert('Attachment', error instanceof Error ? error.message : 'Could not send this attachment.');
     } finally {
       setSending(false);
     }
@@ -333,8 +402,13 @@ export default function ConversationScreen() {
         renderItem={({ item }) => {
           const mine = item.sender_id === userId;
           const readers = readersByMessage[item.id] ?? [];
-          return <View style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: '82%', backgroundColor: mine ? '#6d4fc3' : '#27272a', borderRadius: 17, borderBottomRightRadius: mine ? 5 : 17, borderBottomLeftRadius: mine ? 17 : 5, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 9 }}>
-            <Text style={{ color: white, fontSize: 14, lineHeight: 20 }}>{item.body || 'Shared an attachment'}</Text>
+          return <View style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: '88%', backgroundColor: mine ? '#6d4fc3' : '#27272a', borderRadius: 17, borderBottomRightRadius: mine ? 5 : 17, borderBottomLeftRadius: mine ? 17 : 5, paddingHorizontal: 10, paddingVertical: 10, marginBottom: 9 }}>
+            {item.media_url ? (
+              item.display_media_url
+                ? <ChatAttachment uri={item.display_media_url} mediaType={item.media_type} />
+                : <Text style={{ color: white, fontSize: 12 }}>Attachment is unavailable. Reopen the conversation to retry.</Text>
+            ) : null}
+            {item.body ? <Text style={{ color: white, fontSize: 14, lineHeight: 20, marginTop: item.media_url ? 7 : 0 }}>{item.body}</Text> : null}
             <Text style={{ color: '#ded6f3', opacity: 0.75, fontSize: 9, marginTop: 5, alignSelf: 'flex-end' }}>{new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
             {mine && readers.length > 0
               ? <Text style={{ color: '#ded6f3', opacity: 0.9, fontSize: 9, marginTop: 3, alignSelf: 'flex-end' }}>{details?.is_group ? 'SEEN BY ' + readers.length : 'SEEN'}</Text>
@@ -345,6 +419,13 @@ export default function ConversationScreen() {
     }
 
     <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 9, padding: 13, paddingBottom: 18, borderTopWidth: 1, borderTopColor: '#27272a' }}>
+      <Pressable
+        onPress={() => void pickAttachment()}
+        disabled={sending || loading}
+        style={{ width: 42, height: 42, borderRadius: 15, backgroundColor: '#302844', alignItems: 'center', justifyContent: 'center' }}
+      >
+        <Text style={{ color: purple, fontSize: 24, fontWeight: '700' }}>＋</Text>
+      </Pressable>
       <TextInput
         value={draft}
         onChangeText={updateDraft}
