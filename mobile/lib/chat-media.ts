@@ -17,8 +17,6 @@ const MIME_EXTENSIONS: Record<string, string> = {
 
 export async function resolveChatMessageAttachment(message: ChatMessage): Promise<ChatMessage> {
   if (!message.media_url) return { ...message, display_media_url: null };
-
-  // Preserve any legacy absolute URLs; new attachments store private object paths.
   if (/^https?:\/\//i.test(message.media_url)) {
     return { ...message, display_media_url: message.media_url };
   }
@@ -90,16 +88,14 @@ export async function sendChatAttachment(
   const { data: message, error: insertError } = await supabase.from('messages').insert({
     conversation_id: conversationId,
     sender_id: user.id,
-    body: '',
+    body: mediaType === 'image' ? 'Shared a photo' : 'Shared a video',
     media_url: objectPath,
     media_type: mediaType,
   }).select('*').single();
 
   if (insertError) {
     const { error: cleanupError } = await supabase.storage.from(BUCKET).remove([objectPath]);
-    if (cleanupError) {
-      console.warn('Could not remove an orphaned chat attachment:', cleanupError.message);
-    }
+    if (cleanupError) console.warn('Could not remove an orphaned chat attachment:', cleanupError.message);
     throw insertError;
   }
 
