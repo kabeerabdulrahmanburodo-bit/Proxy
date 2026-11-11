@@ -95,3 +95,47 @@ create policy "Uploaders delete own chat attachments"
 
 -- Messages already require an authenticated conversation member and sender_id = auth.uid().
 -- The object-path policy above ensures only members can mint signed URLs for that conversation.
+
+-- A message may only point to an attachment uploaded by its sender into that
+-- same conversation. This prevents arbitrary remote URLs and cross-chat paths.
+drop policy if exists "Members can send as themselves" on public.messages;
+create policy "Members can send as themselves"
+  on public.messages
+  for insert
+  to authenticated
+  with check (
+    auth.uid() = sender_id
+    and public.is_conversation_member(conversation_id, auth.uid())
+    and (
+      media_url is null
+      or (
+        media_type in ('image', 'video')
+        and split_part(media_url, '/', 1) = conversation_id::text
+        and split_part(media_url, '/', 2) = auth.uid()::text
+        and split_part(media_url, '/', 3) <> ''
+      )
+    )
+  );
+
+drop policy if exists "Sender can update own message" on public.messages;
+create policy "Sender can update own message"
+  on public.messages
+  for update
+  to authenticated
+  using (
+    auth.uid() = sender_id
+    and public.is_conversation_member(conversation_id, auth.uid())
+  )
+  with check (
+    auth.uid() = sender_id
+    and public.is_conversation_member(conversation_id, auth.uid())
+    and (
+      media_url is null
+      or (
+        media_type in ('image', 'video')
+        and split_part(media_url, '/', 1) = conversation_id::text
+        and split_part(media_url, '/', 2) = auth.uid()::text
+        and split_part(media_url, '/', 3) <> ''
+      )
+    )
+  );
