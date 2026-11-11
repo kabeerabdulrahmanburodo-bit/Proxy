@@ -28,7 +28,7 @@ export type ConversationSummary = {
   title: string | null;
   created_at: string;
   other_user: UserSearchResult | null;
-  last_message: Pick<ChatMessage, 'body' | 'created_at' | 'sender_id' | 'media_url'> | null;
+  last_message: Pick<ChatMessage, 'body' | 'created_at' | 'sender_id'> & { media_url?: string | null } | null;
 };
 export type ConversationDetails = {
   id: string;
