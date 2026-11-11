@@ -9,7 +9,9 @@ export type VideoPost = {
 };
 export type ChatMessage = {
   id: string; conversation_id: string; sender_id: string; body: string;
-  media_url: string | null; created_at: string; read_at: string | null;
+  media_url: string | null; media_type: 'image' | 'video' | null;
+  display_media_url?: string | null;
+  created_at: string; read_at: string | null;
 };
 export type MessageReadReceipt = {
   message_id: string; user_id: string; read_at: string;
@@ -26,7 +28,7 @@ export type ConversationSummary = {
   title: string | null;
   created_at: string;
   other_user: UserSearchResult | null;
-  last_message: Pick<ChatMessage, 'body' | 'created_at' | 'sender_id'> | null;
+  last_message: Pick<ChatMessage, 'body' | 'created_at' | 'sender_id' | 'media_url'> | null;
 };
 export type ConversationDetails = {
   id: string;
