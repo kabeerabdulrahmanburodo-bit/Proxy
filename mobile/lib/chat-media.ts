@@ -17,8 +17,10 @@ const MIME_EXTENSIONS: Record<string, string> = {
 
 export async function resolveChatMessageAttachment(message: ChatMessage): Promise<ChatMessage> {
   if (!message.media_url) return { ...message, display_media_url: null };
+  // Only private Storage object paths are rendered. Do not fetch arbitrary remote URLs
+  // supplied in a message, which could expose the recipient to untrusted media hosts.
   if (/^https?:\/\//i.test(message.media_url)) {
-    return { ...message, display_media_url: message.media_url };
+    return { ...message, display_media_url: null };
   }
 
   const { data, error } = await supabase.storage
