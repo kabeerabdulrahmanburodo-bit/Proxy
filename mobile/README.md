@@ -54,7 +54,7 @@ Migration 0009 creates:
 - notification_preferences, with separate message, follow, like and comment switches protected by per-user RLS
 - push_outbox, which has no client policies or client grants and is accessible only to the server-side service role
 
-PostgreSQL creates in-app notification rows for new direct/group messages, follows, video likes and video comments. An insert trigger adds eligible events to the private outbox unless that category is disabled. The Edge Function claims an outbox row atomically, sends Expo Push Service messages in batches, disables tokens reported as DeviceNotRegistered, and records delivery status. A webhook secret protects the Edge Function endpoint; the service-role key remains server-side.
+PostgreSQL creates in-app notification rows for new direct/group messages, follows, video likes and video comments. An insert trigger adds eligible events to the private outbox unless that category is disabled. The Edge Function claims an outbox row atomically, sends Expo Push Service messages in batches, disables tokens reported as DeviceNotRegistered, and records Expo ticket acceptance/failure. An accepted Expo ticket is not proof of final device delivery; push receipt polling is not implemented yet. A webhook secret protects the Edge Function endpoint; the service-role key remains server-side.
 
 ### Push deployment (required; not completed by this repository commit)
 1. Run migrations 0001 through 0009 in order.
