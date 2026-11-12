@@ -10,7 +10,13 @@
     "plugins": [
       "expo-router",
       "expo-image-picker",
-      "expo-camera"
+      "expo-camera",
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "default"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
