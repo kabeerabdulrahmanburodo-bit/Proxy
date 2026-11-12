@@ -28,3 +28,14 @@ jobs:
           node-version: 20
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
+
+  edge-function-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check push delivery Edge Function
+        working-directory: mobile
+        run: deno check supabase/functions/send-push-notification/index.ts
