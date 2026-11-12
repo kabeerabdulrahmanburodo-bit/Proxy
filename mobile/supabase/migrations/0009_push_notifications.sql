@@ -84,7 +84,9 @@ language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
-declare current_user_id uuid := auth.uid();
+declare
+  current_user_id uuid := auth.uid();
+  affected_count integer;
 begin
   if current_user_id is null then
     raise exception 'Authentication required';
@@ -105,11 +107,16 @@ begin
     left(nullif(trim(device_label), ''), 80), true, now()
   )
   on conflict (expo_push_token) do update
-    set user_id = excluded.user_id,
-        platform = excluded.platform,
+    set platform = excluded.platform,
         device_label = excluded.device_label,
         enabled = true,
-        last_seen_at = now();
+        last_seen_at = now()
+    where public.push_devices.user_id = excluded.user_id;
+
+  get diagnostics affected_count = row_count;
+  if affected_count = 0 then
+    raise exception 'This device token is already registered to another account';
+  end if;
 
   insert into public.notification_preferences(user_id)
   values (current_user_id)

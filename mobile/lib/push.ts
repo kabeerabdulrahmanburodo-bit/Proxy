@@ -51,6 +51,15 @@ export async function saveNotificationPreferences(preferences: NotificationPrefe
 export async function isPushEnabledOnThisDevice(): Promise<boolean> {
   const token = await AsyncStorage.getItem(PUSH_TOKEN_KEY);
   if (!token) return false;
+  const permission = await Notifications.getPermissionsAsync();
+  if (permission.status !== 'granted') {
+    const { error: unregisterError } = await supabase.rpc('unregister_push_device', {
+      device_token: token,
+    });
+    if (unregisterError) throw unregisterError;
+    await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
+    return false;
+  }
   const { data, error } = await supabase.from('push_devices')
     .select('enabled')
     .eq('expo_push_token', token)
