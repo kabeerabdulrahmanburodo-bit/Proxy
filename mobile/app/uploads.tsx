@@ -81,7 +81,7 @@ export default function PendingUploadsScreen() {
             </View>
           ) : jobs.map(job => {
             const progress = progressById[job.id] ?? job.progress;
-            const busy = activeId === job.id;
+            const busy = activeId === job.id || job.status === 'uploading';
             return (
               <View key={job.id} style={{ backgroundColor: '#18181b', borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#303036' }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
