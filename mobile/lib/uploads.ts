@@ -102,7 +102,17 @@ const tusUrlStorage = {
   },
   async findUploadsByFingerprint(fingerprint: string) {
     const prefix = 'tus::' + fingerprint + '::';
-    return (await readTusEntries()).filter(entry => entry.urlStorageKey.startsWith(prefix));
+    const matching = (await readTusEntries()).filter(entry => entry.urlStorageKey.startsWith(prefix));
+    // Supabase TUS session URLs expire after 24 hours. Drop them slightly early so
+    // tus-js-client creates a fresh session rather than retrying an expired URL.
+    const cutoff = Date.now() - 23 * 60 * 60 * 1000;
+    const fresh = matching.filter(entry => {
+      const createdAt = Date.parse(entry.creationTime);
+      return Number.isFinite(createdAt) && createdAt >= cutoff;
+    });
+    const expired = matching.filter(entry => !fresh.some(item => item.urlStorageKey === entry.urlStorageKey));
+    await Promise.all(expired.map(entry => tusUrlStorage.removeUpload(entry.urlStorageKey)));
+    return fresh;
   },
   async removeUpload(urlStorageKey: string) {
     const entries = await readTusEntries();
