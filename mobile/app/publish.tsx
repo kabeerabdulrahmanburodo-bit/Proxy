@@ -57,7 +57,7 @@ export default function PublishVideo() {
       {busy ? (
         <View style={{ marginTop: 18 }}>
           <View style={{ height: 7, borderRadius: 4, backgroundColor: '#27272a', overflow: 'hidden' }}>
-            <View style={{ width: Math.round(progress * 100) + '%', height: 7, backgroundColor: purple }} />
+            <View style={{ width: (Math.round(progress * 100) + '%') as any, height: 7, backgroundColor: purple }} />
           </View>
           <Text style={{ color: muted, fontSize: 11, marginTop: 7, textAlign: 'center' }}>
             Uploading {Math.round(progress * 100)}% · you can return to this screen after a brief background pause
