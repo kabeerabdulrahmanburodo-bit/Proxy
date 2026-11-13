@@ -92,7 +92,7 @@ export default function PendingUploadsScreen() {
                 </View>
                 <Text style={{ color: white, fontSize: 14, fontWeight: '800', marginTop: 8 }} numberOfLines={1}>{job.fileName}</Text>
                 <View style={{ height: 6, borderRadius: 4, backgroundColor: '#303036', overflow: 'hidden', marginTop: 14 }}>
-                  <View style={{ width: Math.round(progress * 100) + '%', height: 6, backgroundColor: purple }} />
+                  <View style={{ width: (Math.round(progress * 100) + '%') as any, height: 6, backgroundColor: purple }} />
                 </View>
                 <Text style={{ color: muted, fontSize: 10, marginTop: 7 }}>
                   {busy ? 'UPLOADING ' + Math.round(progress * 100) + '%' : job.status.toUpperCase() + ' · ' + Math.round(progress * 100) + '%'}
