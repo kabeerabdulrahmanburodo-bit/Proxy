@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { startMediaUpload } from './uploads';
 import type { ChatMessage } from './types';
 
 const BUCKET = 'chat-attachments';
@@ -44,11 +45,9 @@ export async function sendChatAttachment(
   contentType: string | null | undefined,
   mediaType: 'image' | 'video',
   reportedFileSize?: number | null,
+  onProgress?: (progress: number) => void,
 ): Promise<ChatMessage> {
   if (!conversationId || !uri) throw new Error('Choose a conversation and an attachment.');
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error('Sign in first.');
-
   const mime = (contentType || (mediaType === 'video' ? 'video/mp4' : 'image/jpeg'))
     .split(';')[0].trim().toLowerCase();
   const extension = MIME_EXTENSIONS[mime];
@@ -63,43 +62,15 @@ export async function sendChatAttachment(
       : 'Images must be 15 MB or smaller.');
   }
 
-  const response = await fetch(uri);
-  if (!response.ok) throw new Error('Could not read the selected attachment from your device.');
-  const blob = await response.blob();
-  if (!blob.size) throw new Error('The selected attachment is empty.');
-  if (blob.size > maxBytes) {
-    throw new Error(mediaType === 'video'
-      ? 'Videos must be 50 MB or smaller.'
-      : 'Images must be 15 MB or smaller.');
-  }
-
-  const cleanName = (fileName || 'attachment.' + extension)
-    .split(/[\\/]/).pop()!
-    .replace(/[^a-zA-Z0-9._-]/g, '_')
-    .slice(-100);
-  const uniqueName = Date.now().toString(36) + '-' +
-    Math.random().toString(36).slice(2, 10) + '-' + cleanName;
-  const objectPath = conversationId + '/' + user.id + '/' + uniqueName;
-
-  const { error: uploadError } = await supabase.storage.from(BUCKET).upload(objectPath, blob, {
+  const message = await startMediaUpload({
+    uri,
+    fileName: fileName || 'attachment.' + extension,
     contentType: mime,
-    upsert: false,
-  });
-  if (uploadError) throw uploadError;
+    purpose: 'chat-attachment',
+    maxBytes,
+    conversationId,
+    mediaType,
+  }, onProgress) as ChatMessage;
 
-  const { data: message, error: insertError } = await supabase.from('messages').insert({
-    conversation_id: conversationId,
-    sender_id: user.id,
-    body: mediaType === 'image' ? 'Shared a photo' : 'Shared a video',
-    media_url: objectPath,
-    media_type: mediaType,
-  }).select('*').single();
-
-  if (insertError) {
-    const { error: cleanupError } = await supabase.storage.from(BUCKET).remove([objectPath]);
-    if (cleanupError) console.warn('Could not remove an orphaned chat attachment:', cleanupError.message);
-    throw insertError;
-  }
-
-  return resolveChatMessageAttachment(message as ChatMessage);
+  return resolveChatMessageAttachment(message);
 }
