@@ -270,6 +270,7 @@ async function uploadWithTus(
 
   let finishUpload: (error?: Error) => void = () => undefined;
   let intentionalPause = false;
+  let lastPersistedProgress = 0;
   const options = {
     endpoint: tusEndpoint(),
     chunkSize: CHUNK_SIZE,
@@ -300,7 +301,10 @@ async function uploadWithTus(
     onProgress: (bytesUploaded: number, bytesTotal: number) => {
       const progress = bytesTotal > 0 ? Math.min(1, bytesUploaded / bytesTotal) : 0;
       onProgress?.(progress);
-      void updateJob(job.id, { progress }).catch(error => console.warn('Could not persist upload progress:', error));
+      if (progress === 1 || progress - lastPersistedProgress >= 0.05) {
+        lastPersistedProgress = progress;
+        void updateJob(job.id, { progress }).catch(error => console.warn('Could not persist upload progress:', error));
+      }
     },
     onError: (error: Error) => {
       if (intentionalPause && error.name === 'AbortError') return;
