@@ -30,10 +30,11 @@ In Supabase SQL Editor, run migrations 0001 through 0009 in filename order. In A
 - Realtime direct and group messaging, member-scoped online presence and live typing indicators
 - Message history pagination in 30-message pages, ordered by timestamp and UUID cursor
 - Per-recipient read receipts for direct and group chats, including realtime Seen indicators
-- Share images and short videos in direct or group chats; media appears inline in the conversation
+- Share images and short videos in direct or group chats; media appears inline in the conversation and uses the same resumable TUS upload queue
 - Vertical, swipeable video feed using expo-video; only the currently visible item plays
-- Video picker and publishing flow: uploads to the public videos bucket, inserts the matching videos row, and removes the uploaded object if the row insert fails
+- Video picker and publishing flow: stages the selected file locally, uploads to the public videos bucket in resumable TUS chunks, inserts the matching videos row, and cleans up the object if database finalization fails
 - Periodic watch-time and completion signals written to video_views
+- Persistent upload queue for feed videos and chat attachments, with progress, retry, local file staging, and resume after app restarts
 - Snap media upload to a private bucket and 24-hour expiry metadata
 - Device push registration, per-category notification preferences and push tap navigation
 
@@ -45,6 +46,10 @@ Group membership changes use SECURITY DEFINER RPCs with a fixed search path. Mig
 Migration 0007 scopes private Supabase Presence channels to current conversation members. The client joins a proxy-chat:<conversation UUID> channel with private: true; RLS checks the authenticated user against conversation_members and permits only Presence events on that topic. Online state is ephemeral, is cleared when a client disconnects, and is marked offline while the app is backgrounded; it is restored when the app returns to the foreground. Typing state automatically returns to idle after 1.6 seconds without input and is cleared when the app backgrounds or the user sends a message.
 
 Migration 0008 creates the private chat-attachments bucket and adds messages.media_type. Object paths are stored in message rows, not signed URLs. Storage RLS checks current conversation membership for reads and uploads, verifies the uploader folder matches auth.uid(), and limits deletion to the uploader while they remain a member. The client mints one-hour signed URLs only when rendering messages. Supported media are JPEG, PNG, WebP, MP4, QuickTime and WebM. The client enforces 15 MB per image and 50 MB per video; the bucket has a 100 MB hard limit.
+
+Feed videos and chat attachments use Supabase Storage's TUS resumable endpoint with 6 MiB chunks and retry delays. Expo FileSystem copies the picker URI into the app's persistent document directory so a transfer can be resumed after the app process is restarted. The TUS upload URL and queue metadata are persisted in AsyncStorage; access tokens are not persisted with the upload. Authorization is refreshed before each TUS request. The upload path remains user-scoped for public videos and conversation/member-scoped for private chat attachments, so the existing Storage RLS rules still apply. The app pauses an active transfer when it backgrounds and resumes it when foregrounded. Open Profile > Pending media uploads to recover interrupted jobs; database finalization is idempotent so a completed object is not uploaded a second time if the app closes before its row is created.
+
+This is **resumable foreground transfer with lifecycle pause/resume**, not a guaranteed native background upload service. The JavaScript TUS client cannot continue executing while iOS/Android suspend or terminate the app. True OS-managed background transfer needs a native background upload implementation and an Expo development/release build; it is not claimed here. Snap uploads still use the earlier single-request path and are not yet part of this queue.
 
 Pagination fetches the newest 30 messages first, then older pages using a timestamp + message UUID cursor. The screen subscribes to message inserts and receipt inserts while it is open.
 
@@ -67,10 +72,10 @@ PostgreSQL creates in-app notification rows for new direct/group messages, follo
 If a push delivery attempt fails, the outbox records the failure and attempt count. A server operator can reset a failed row to pending and re-invoke the webhook/function after correcting the cause. No service credentials or webhook secret are committed.
 
 ## Video feed behavior and limits
-The feed prioritizes followed creators, then recent posts. Supabase RLS controls which public and followed-only rows a signed-in user can read. This is a starter ranking, not a machine-learning recommendation system. Watch metrics are sampled while a video is actively playing; short sessions under the five-second sampling interval may not be recorded. Upload currently reads the selected local URI into a Blob, which can use substantial memory for large files. For production, move to resumable uploads, background transfer, moderation, transcoding, thumbnails and CDN delivery.
+The feed prioritizes followed creators, then recent posts. Supabase RLS controls which public and followed-only rows a signed-in user can read. This is a starter ranking, not a machine-learning recommendation system. Watch metrics are sampled while a video is actively playing; short sessions under the five-second sampling interval may not be recorded. Feed video publishing now uses resumable TUS chunks rather than loading the entire clip into a Blob. For production, add native OS-managed background transfer, moderation, transcoding, thumbnails and CDN delivery.
 
 ## Important production work still required
-1. Add resumable/background uploads for large chat and feed videos; current chat attachment upload buffers a Blob in memory and is intended for modest file sizes.
+1. Add native OS-managed background transfer and move Snap uploads onto the resumable queue; current queue resumes in the foreground after app restarts but does not run while the OS suspends the app.
 2. Replace starter feed ordering with a server-side recommendation pipeline using watch duration, completion, skips, follows, likes, freshness, safety and diversity.
 3. Add an automated scheduled cleanup job for expired snap rows and their private Storage objects. Expiry filtering alone does not physically delete media.
 4. Implement WebRTC calling with a native WebRTC module, signaling, STUN/TURN credentials, call lifecycle, permissions, reconnect handling and abuse controls. Native WebRTC is not supported in Expo Go; use an Expo development build / EAS Build.
@@ -84,6 +89,6 @@ The feed prioritizes followed creators, then recent posts. Supabase RLS controls
 - Supabase Realtime message subscriptions require the messages and message_reads tables to be in the Realtime publication; migrations add them if absent.
 
 ## Suggested next milestones
-1. Add resumable/background media uploads and attachment cleanup.
+1. Add native background uploads and resumable Snap media publishing.
 2. Add WebRTC calls with an Expo development build.
 3. Ship feed ranking, moderation and in-app notification history.
