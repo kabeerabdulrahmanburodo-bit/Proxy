@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { startMediaUpload } from './uploads';
 import type {
   ChatMessage, ConversationDetails, ConversationPresence, ConversationSummary, MessageReadReceipt,
   UserSearchResult, VideoPost,
@@ -25,39 +26,21 @@ export async function getVideoFeed(limit = 20): Promise<VideoPost[]> {
   ).slice(0, limit);
 }
 
-export async function publishVideo(uri: string, fileName: string, contentType: string, caption: string) {
-  const text = caption.trim();
-  if (text.length > 2200) throw new Error('Caption must be 2,200 characters or fewer.');
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error('Sign in first.');
-
-  const response = await fetch(uri);
-  if (!response.ok) throw new Error('Could not read the selected video from your device.');
-  const blob = await response.blob();
-  if (!blob.size) throw new Error('The selected video is empty.');
-  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const path = user.id + '/' + Date.now() + '-' + (safeName || 'upload.mp4');
-  const mime = contentType || blob.type || 'video/mp4';
-
-  const { error: uploadError } = await supabase.storage.from('videos').upload(path, blob, {
-    contentType: mime, upsert: false,
-  });
-  if (uploadError) throw uploadError;
-
-  const { data: publicData } = supabase.storage.from('videos').getPublicUrl(path);
-  const { data: post, error: insertError } = await supabase.from('videos').insert({
-    user_id: user.id,
-    caption: text || null,
-    video_url: publicData.publicUrl,
-    visibility: 'public',
-  }).select('id,user_id,caption,video_url,thumbnail_url,created_at').single();
-
-  if (insertError) {
-    // Avoid leaving an orphaned public upload if its database row cannot be created.
-    await supabase.storage.from('videos').remove([path]);
-    throw insertError;
-  }
-  return post as VideoPost;
+export async function publishVideo(
+  uri: string,
+  fileName: string,
+  contentType: string,
+  caption: string,
+  onProgress?: (progress: number) => void,
+): Promise<VideoPost> {
+  return await startMediaUpload({
+    uri,
+    fileName,
+    contentType,
+    purpose: 'video-post',
+    maxBytes: 500 * 1024 * 1024,
+    caption: caption.trim(),
+  }, onProgress) as VideoPost;
 }
 
 export async function recordVideoView(videoId: string, watchSeconds: number, completed = false) {
