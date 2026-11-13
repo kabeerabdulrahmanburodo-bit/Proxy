@@ -162,9 +162,16 @@ export default function Profile() {
       </Text>
 
       <Pressable
+        onPress={() => router.push('/uploads')}
+        style={{ backgroundColor: '#302844', padding: 16, borderRadius: 14, marginTop: 28, alignItems: 'center' }}
+      >
+        <Text style={{ color: purple, fontWeight: '900' }}>PENDING MEDIA UPLOADS</Text>
+      </Pressable>
+
+      <Pressable
         onPress={() => void logout()}
         disabled={saving}
-        style={{ borderColor: '#3f3f46', borderWidth: 1, padding: 16, borderRadius: 14, marginTop: 28, alignItems: 'center' }}
+        style={{ borderColor: '#3f3f46', borderWidth: 1, padding: 16, borderRadius: 14, marginTop: 12, alignItems: 'center' }}
       >
         <Text style={{ color: white, fontWeight: '800' }}>SIGN OUT</Text>
       </Pressable>
