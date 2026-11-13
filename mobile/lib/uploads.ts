@@ -266,6 +266,7 @@ async function uploadWithTus(
     },
   };
 
+  let finishUpload: (error?: Error) => void = () => undefined;
   const options = {
     endpoint: tusEndpoint(),
     chunkSize: CHUNK_SIZE,
@@ -298,6 +299,8 @@ async function uploadWithTus(
       onProgress?.(progress);
       void updateJob(job.id, { progress });
     },
+    onError: (error: Error) => finishUpload(error),
+    onSuccess: () => finishUpload(),
   } as unknown as NonNullable<ConstructorParameters<typeof tus.Upload>[1]>;
 
   const upload = new tus.Upload(stagedFile, options);
@@ -320,9 +323,14 @@ async function uploadWithTus(
     const start = () => {
       if (settled || inactive) return;
       void updateJob(job.id, { status: 'uploading', lastError: undefined });
-      upload.start();
+      try {
+        upload.start();
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error('Could not start the resumable upload.'));
+      }
     };
 
+    finishUpload = finish;
     const appStateSubscription = AppState.addEventListener('change', nextState => {
       if (nextState !== 'active' && !inactive) {
         inactive = true;
@@ -333,12 +341,6 @@ async function uploadWithTus(
         void pausePromise.then(start);
       }
     });
-
-    (upload as unknown as { options: { onError?: (error: Error) => void; onSuccess?: () => void } }).options.onError = error => {
-      if (inactive && error.name === 'AbortError') return;
-      finish(error);
-    };
-    (upload as unknown as { options: { onSuccess?: () => void } }).options.onSuccess = () => finish();
 
     if (inactive) {
       void updateJob(job.id, { status: 'paused' });
