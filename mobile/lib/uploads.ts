@@ -267,6 +267,7 @@ async function uploadWithTus(
   };
 
   let finishUpload: (error?: Error) => void = () => undefined;
+  let intentionalPause = false;
   const options = {
     endpoint: tusEndpoint(),
     chunkSize: CHUNK_SIZE,
@@ -297,9 +298,12 @@ async function uploadWithTus(
     onProgress: (bytesUploaded: number, bytesTotal: number) => {
       const progress = bytesTotal > 0 ? Math.min(1, bytesUploaded / bytesTotal) : 0;
       onProgress?.(progress);
-      void updateJob(job.id, { progress });
+      void updateJob(job.id, { progress }).catch(error => console.warn('Could not persist upload progress:', error));
     },
-    onError: (error: Error) => finishUpload(error),
+    onError: (error: Error) => {
+      if (intentionalPause && error.name === 'AbortError') return;
+      finishUpload(error);
+    },
     onSuccess: () => finishUpload(),
   } as unknown as NonNullable<ConstructorParameters<typeof tus.Upload>[1]>;
 
@@ -322,7 +326,9 @@ async function uploadWithTus(
 
     const start = () => {
       if (settled || inactive) return;
-      void updateJob(job.id, { status: 'uploading', lastError: undefined });
+      intentionalPause = false;
+      void updateJob(job.id, { status: 'uploading', lastError: undefined })
+        .catch(error => console.warn('Could not update upload status:', error));
       try {
         upload.start();
       } catch (error) {
@@ -334,7 +340,9 @@ async function uploadWithTus(
     const appStateSubscription = AppState.addEventListener('change', nextState => {
       if (nextState !== 'active' && !inactive) {
         inactive = true;
-        void updateJob(job.id, { status: 'paused' });
+        intentionalPause = true;
+        void updateJob(job.id, { status: 'paused' })
+          .catch(error => console.warn('Could not save paused upload status:', error));
         pausePromise = upload.abort().catch(() => undefined);
       } else if (nextState === 'active' && inactive) {
         inactive = false;
@@ -343,7 +351,8 @@ async function uploadWithTus(
     });
 
     if (inactive) {
-      void updateJob(job.id, { status: 'paused' });
+      void updateJob(job.id, { status: 'paused' })
+        .catch(error => console.warn('Could not save paused upload status:', error));
     } else {
       start();
     }
@@ -392,9 +401,19 @@ async function finalizeUpload(job: MediaUploadJob): Promise<VideoPost | ChatMess
 
 async function completeJob(job: MediaUploadJob) {
   const result = await finalizeUpload(job);
-  await clearTusEntries(job.id);
-  const jobs = await readJobs();
-  await writeJobs(jobs.filter(item => item.id !== job.id));
+  try {
+    await clearTusEntries(job.id);
+  } catch (error) {
+    console.warn('The completed TUS session could not be cleared from local storage:', error);
+  }
+  try {
+    const jobs = await readJobs();
+    await writeJobs(jobs.filter(item => item.id !== job.id));
+  } catch (error) {
+    // Keep the job if local queue cleanup fails. A retry detects the existing Storage
+    // object and database row, then safely repeats only the local cleanup.
+    console.warn('The completed upload could not be removed from the local queue:', error);
+  }
   try {
     const staged = new File(job.stagedUri);
     if (staged.exists) staged.delete();
