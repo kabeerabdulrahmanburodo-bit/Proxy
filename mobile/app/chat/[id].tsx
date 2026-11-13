@@ -429,7 +429,7 @@ export default function ConversationScreen() {
     {attachmentProgress !== null ? (
       <View style={{ paddingHorizontal: 16, paddingTop: 9 }}>
         <View style={{ height: 5, borderRadius: 3, backgroundColor: '#27272a', overflow: 'hidden' }}>
-          <View style={{ width: Math.round(attachmentProgress * 100) + '%', height: 5, backgroundColor: purple }} />
+          <View style={{ width: (Math.round(attachmentProgress * 100) + '%') as any, height: 5, backgroundColor: purple }} />
         </View>
         <Text style={{ color: muted, fontSize: 10, marginTop: 5 }}>Uploading attachment · {Math.round(attachmentProgress * 100)}%</Text>
       </View>
