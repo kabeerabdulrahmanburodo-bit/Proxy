@@ -203,7 +203,9 @@ export async function getPendingMediaUploads(): Promise<MediaUploadJob[]> {
   const jobs = await readJobs();
   const visible = jobs
     .filter(job => job.ownerId === user.id)
-    .map(job => job.status === 'uploading' ? { ...job, status: 'paused' as const } : job)
+    .map(job => job.status === 'uploading' && !activeJobs.has(job.id)
+      ? { ...job, status: 'paused' as const }
+      : job)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   await writeJobs(jobs.map(job => {
     const refreshed = visible.find(item => item.id === job.id);
