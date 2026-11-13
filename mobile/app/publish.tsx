@@ -10,6 +10,7 @@ export default function PublishVideo() {
   const [asset, setAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [caption, setCaption] = useState('');
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
 
   async function chooseVideo() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -29,10 +30,15 @@ export default function PublishVideo() {
     try {
       const fileName = asset.fileName || 'proxy-video.mp4';
       const mime = asset.mimeType || 'video/mp4';
-      await publishVideo(asset.uri, fileName, mime, caption);
+      setProgress(0);
+      await publishVideo(asset.uri, fileName, mime, caption, setProgress);
       Alert.alert('Published', 'Your video is now in the PROXY feed.', [{ text: 'OK', onPress: () => router.back() }]);
     } catch (error) {
-      Alert.alert('Upload failed', error instanceof Error ? error.message : 'Please try again.');
+      Alert.alert(
+        'Upload paused',
+        (error instanceof Error ? error.message : 'Please try again.') +
+          '\\n\\nIf the connection dropped, your staged file is saved. Resume it from Profile > Pending uploads.',
+      );
     } finally { setBusy(false); }
   }
 
@@ -48,6 +54,16 @@ export default function PublishVideo() {
       </Pressable>
       <TextInput value={caption} onChangeText={setCaption} placeholder="Write a caption…" placeholderTextColor="#71717a" multiline maxLength={2200} editable={!busy} style={{ color: white, minHeight: 110, borderRadius: 14, borderWidth: 1, borderColor: '#3f3f46', padding: 15, marginTop: 20, textAlignVertical: 'top' }} />
       <Text style={{ color: muted, textAlign: 'right', marginTop: 6, fontSize: 11 }}>{caption.length}/2200</Text>
+      {busy ? (
+        <View style={{ marginTop: 18 }}>
+          <View style={{ height: 7, borderRadius: 4, backgroundColor: '#27272a', overflow: 'hidden' }}>
+            <View style={{ width: Math.round(progress * 100) + '%', height: 7, backgroundColor: purple }} />
+          </View>
+          <Text style={{ color: muted, fontSize: 11, marginTop: 7, textAlign: 'center' }}>
+            Uploading {Math.round(progress * 100)}% · you can return to this screen after a brief background pause
+          </Text>
+        </View>
+      ) : null}
       <Pressable onPress={submit} disabled={busy || !asset} style={{ backgroundColor: !asset || busy ? '#4c3d6d' : purple, padding: 17, borderRadius: 15, alignItems: 'center', marginTop: 22 }}>
         {busy ? <ActivityIndicator color="#181024" /> : <Text style={{ color: '#181024', fontWeight: '900' }}>PUBLISH VIDEO</Text>}
       </Pressable>
