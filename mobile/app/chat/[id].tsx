@@ -67,6 +67,7 @@ export default function ConversationScreen() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [sending, setSending] = useState(false);
+  const [attachmentProgress, setAttachmentProgress] = useState<number | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const userIdRef = useRef('');
   const ownMessageIdsRef = useRef(new Set<string>());
@@ -301,6 +302,7 @@ export default function ConversationScreen() {
       asset.type === 'video' || asset.mimeType?.startsWith('video/') ? 'video' : 'image';
 
     setSending(true);
+    setAttachmentProgress(0);
     stopTyping();
     try {
       const created = await sendChatAttachment(
@@ -310,14 +312,20 @@ export default function ConversationScreen() {
         asset.mimeType,
         mediaType,
         asset.fileSize,
+        setAttachmentProgress,
       );
       ownMessageIdsRef.current.add(created.id);
       scrollToBottomRef.current = true;
       setMessages(old => old.some(message => message.id === created.id) ? old : [...old, created]);
     } catch (error) {
-      Alert.alert('Attachment', error instanceof Error ? error.message : 'Could not send this attachment.');
+      Alert.alert(
+        'Attachment upload',
+        (error instanceof Error ? error.message : 'Could not send this attachment.') +
+          '\\n\\nIf the transfer was interrupted, resume it from Profile > Pending uploads.',
+      );
     } finally {
       setSending(false);
+      setAttachmentProgress(null);
     }
   }
 
@@ -418,6 +426,14 @@ export default function ConversationScreen() {
       />
     }
 
+    {attachmentProgress !== null ? (
+      <View style={{ paddingHorizontal: 16, paddingTop: 9 }}>
+        <View style={{ height: 5, borderRadius: 3, backgroundColor: '#27272a', overflow: 'hidden' }}>
+          <View style={{ width: Math.round(attachmentProgress * 100) + '%', height: 5, backgroundColor: purple }} />
+        </View>
+        <Text style={{ color: muted, fontSize: 10, marginTop: 5 }}>Uploading attachment · {Math.round(attachmentProgress * 100)}%</Text>
+      </View>
+    ) : null}
     <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 9, padding: 13, paddingBottom: 18, borderTopWidth: 1, borderTopColor: '#27272a' }}>
       <Pressable
         onPress={() => void pickAttachment()}
