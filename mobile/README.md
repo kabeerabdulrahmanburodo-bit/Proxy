@@ -16,7 +16,7 @@ cp .env.example .env
 npx expo start
 ~~~
 
-In Supabase SQL Editor, run migrations 0001 through 0009 in filename order. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
+In Supabase SQL Editor, run migrations 0001 through 0010 in filename order. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
 
 ## Current implementation
 - Expo Router mobile shell with Discover, Chats, Snaps and Profile tabs
@@ -34,8 +34,8 @@ In Supabase SQL Editor, run migrations 0001 through 0009 in filename order. In A
 - Vertical, swipeable video feed using expo-video; only the currently visible item plays
 - Video picker and publishing flow: stages the selected file locally, uploads to the public videos bucket in resumable TUS chunks, inserts the matching videos row, and cleans up the object if database finalization fails
 - Periodic watch-time and completion signals written to video_views
-- Persistent upload queue for feed videos and chat attachments, with progress, retry, local file staging, and resume after app restarts
-- Snap media upload to a private bucket and 24-hour expiry metadata
+- Persistent upload queue for feed videos, chat attachments and 24-hour snaps, with progress, retry, local file staging, and resume after app restarts
+- Resumable Snap photo/video uploads to the private `snaps` bucket, with 24-hour expiry metadata and owner/follower-scoped media access
 - Device push registration, per-category notification preferences and push tap navigation
 
 ## Messaging behavior and security
@@ -47,9 +47,9 @@ Migration 0007 scopes private Supabase Presence channels to current conversation
 
 Migration 0008 creates the private chat-attachments bucket and adds messages.media_type. Object paths are stored in message rows, not signed URLs. Storage RLS checks current conversation membership for reads and uploads, verifies the uploader folder matches auth.uid(), and limits deletion to the uploader while they remain a member. The client mints one-hour signed URLs only when rendering messages. Supported media are JPEG, PNG, WebP, MP4, QuickTime and WebM. The client enforces 15 MB per image and 50 MB per video; the bucket has a 100 MB hard limit.
 
-Feed videos and chat attachments use Supabase Storage's TUS resumable endpoint with 6 MiB chunks and retry delays. Expo FileSystem copies the picker URI into the app's persistent document directory so a transfer can be resumed after the app process is restarted. The TUS upload URL and queue metadata are persisted in AsyncStorage; access tokens are not persisted with the upload. Supabase TUS session URLs expire after 24 hours; the client discards saved sessions after 23 hours and starts a fresh transfer for the same staged file. Authorization is refreshed before each TUS request. The upload path remains user-scoped for public videos and conversation/member-scoped for private chat attachments, so the existing Storage RLS rules still apply. The app pauses an active transfer when it backgrounds and resumes it when foregrounded. Open Profile > Pending media uploads to recover interrupted jobs; database finalization is idempotent so a completed object is not uploaded a second time if the app closes before its row is created.
+Feed videos, chat attachments and Snap media use Supabase Storage's TUS resumable endpoint with 6 MiB chunks and retry delays. Expo FileSystem copies the picker URI into the app's persistent document directory so a transfer can be resumed after the app process is restarted. The TUS upload URL and queue metadata are persisted in AsyncStorage; access tokens are not persisted with the upload. Supabase TUS session URLs expire after 24 hours; the client discards saved sessions after 23 hours and starts a fresh transfer for the same staged file. Authorization is refreshed before each TUS request. The upload path remains user-scoped for public videos and private snaps, and conversation/member-scoped for private chat attachments, so the Storage RLS rules still apply. Migration 0010 stores new snap media as an object path rather than a signed URL. Snap Storage reads are allowed to the owner or to a follower only while the corresponding snap row is visible and unexpired under PostgreSQL RLS; owners can also verify their own upload before row finalization. The app pauses an active transfer when it backgrounds and resumes it when foregrounded. Open Profile > Pending media uploads to recover interrupted jobs; database finalization is idempotent so a completed object is not uploaded a second time if the app closes before its row is created.
 
-This is **resumable foreground transfer with lifecycle pause/resume**, not a guaranteed native background upload service. The JavaScript TUS client cannot continue executing while iOS/Android suspend or terminate the app. True OS-managed background transfer needs a native background upload implementation and an Expo development/release build; it is not claimed here. Snap uploads still use the earlier single-request path and are not yet part of this queue.
+This is **resumable foreground transfer with lifecycle pause/resume**, not a guaranteed native background upload service. The JavaScript TUS client cannot continue executing while iOS/Android suspend or terminate the app. True OS-managed background transfer needs a native background upload implementation and an Expo development/release build; it is not claimed here. Snap uploads now use the same resumable queue. The queue still pauses while the OS suspends the app; it is not a native background transfer service.
 
 Pagination fetches the newest 30 messages first, then older pages using a timestamp + message UUID cursor. The screen subscribes to message inserts and receipt inserts while it is open.
 
@@ -62,7 +62,7 @@ Migration 0009 creates:
 PostgreSQL creates in-app notification rows for new direct/group messages, follows, video likes and video comments. An insert trigger adds eligible events to the private outbox unless that category is disabled. The Edge Function claims an outbox row atomically, sends Expo Push Service messages in batches, disables tokens reported as DeviceNotRegistered, and records Expo ticket acceptance/failure. An accepted Expo ticket is not proof of final device delivery; push receipt polling is not implemented yet. A webhook secret protects the Edge Function endpoint; the service-role key remains server-side.
 
 ### Push deployment (required; not completed by this repository commit)
-1. Run migrations 0001 through 0009 in order.
+1. Run migrations 0001 through 0010 in order.
 2. Link the Supabase project from mobile/ with the Supabase CLI and deploy supabase/functions/send-push-notification. Only this function has JWT verification disabled; it requires the x-proxy-webhook-secret header.
 3. Set the Edge Function secret PROXY_PUSH_WEBHOOK_SECRET to a long random value. Supabase supplies SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Edge Functions; do not copy either into the app.
 4. In Supabase Dashboard, create a Database Webhook for INSERT on public.push_outbox, targeting the deployed send-push-notification function URL. Add a custom header named x-proxy-webhook-secret with the same secret. Do not expose that secret in the mobile app or repository.
@@ -75,7 +75,7 @@ If a push delivery attempt fails, the outbox records the failure and attempt cou
 The feed prioritizes followed creators, then recent posts. Supabase RLS controls which public and followed-only rows a signed-in user can read. This is a starter ranking, not a machine-learning recommendation system. Watch metrics are sampled while a video is actively playing; short sessions under the five-second sampling interval may not be recorded. Feed video publishing now uses resumable TUS chunks rather than loading the entire clip into a Blob. For production, add native OS-managed background transfer, moderation, transcoding, thumbnails and CDN delivery.
 
 ## Important production work still required
-1. Add native OS-managed background transfer and move Snap uploads onto the resumable queue; current queue resumes in the foreground after app restarts but does not run while the OS suspends the app.
+1. Add native OS-managed background transfer; the current queue resumes in the foreground after app restarts but does not run while the OS suspends the app.
 2. Replace starter feed ordering with a server-side recommendation pipeline using watch duration, completion, skips, follows, likes, freshness, safety and diversity.
 3. Add an automated scheduled cleanup job for expired snap rows and their private Storage objects. Expiry filtering alone does not physically delete media.
 4. Implement WebRTC calling with a native WebRTC module, signaling, STUN/TURN credentials, call lifecycle, permissions, reconnect handling and abuse controls. Native WebRTC is not supported in Expo Go; use an Expo development build / EAS Build.
@@ -84,7 +84,7 @@ The feed prioritizes followed creators, then recent posts. Supabase RLS controls
 ## Media and privacy notes
 - Video bucket is public for playback. Do not place private media there.
 - Chat attachments use a private bucket. Do not persist signed URLs; they grant bearer access until expiration. Storage RLS is required for minting signed URLs.
-- Snap bucket is private. The starter snap helper stores a signed URL; for a hardened release, store the object path in the database and mint short-lived signed URLs only after authorization.
+- Snap bucket is private. New snap rows store the object path, not a signed URL. Storage RLS allows the owner or a follower with access to an unexpired snap row to mint a short-lived signed URL. Legacy rows created before migration 0010 may still contain signed URLs until those rows expire.
 - Set explicit Supabase bucket size/MIME limits appropriate to your launch. Configure storage lifecycle cleanup.
 - Supabase Realtime message subscriptions require the messages and message_reads tables to be in the Realtime publication; migrations add them if absent.
 
