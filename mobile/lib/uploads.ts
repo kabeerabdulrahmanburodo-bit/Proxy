@@ -3,16 +3,16 @@ import { AppState } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as tus from 'tus-js-client';
 import { supabase } from './supabase';
-import type { ChatMessage, VideoPost } from './types';
+import type { ChatMessage, Snap, VideoPost } from './types';
 
-export type MediaUploadPurpose = 'video-post' | 'chat-attachment';
+export type MediaUploadPurpose = 'video-post' | 'chat-attachment' | 'snap';
 export type MediaUploadStatus = 'queued' | 'uploading' | 'paused' | 'failed';
 
 export interface MediaUploadJob {
   id: string;
   ownerId: string;
   purpose: MediaUploadPurpose;
-  bucket: 'videos' | 'chat-attachments';
+  bucket: 'videos' | 'chat-attachments' | 'snaps';
   objectPath: string;
   stagedUri: string;
   fileName: string;
@@ -25,6 +25,7 @@ export interface MediaUploadJob {
   caption?: string;
   conversationId?: string;
   mediaType?: 'image' | 'video';
+  lifetimeHours?: number;
 }
 
 interface CreateMediaUploadInput {
@@ -36,6 +37,7 @@ interface CreateMediaUploadInput {
   caption?: string;
   conversationId?: string;
   mediaType?: 'image' | 'video';
+  lifetimeHours?: number;
 }
 
 interface TusUrlEntry {
@@ -145,6 +147,13 @@ export async function createMediaUploadJob(input: CreateMediaUploadInput): Promi
   if (input.purpose === 'chat-attachment' && (!input.conversationId || !input.mediaType)) {
     throw new Error('A conversation and attachment type are required.');
   }
+  if (input.purpose === 'snap' && !input.mediaType) {
+    throw new Error('Choose whether this snap is a photo or video.');
+  }
+  if (input.purpose === 'snap' && input.lifetimeHours !== undefined &&
+      (!Number.isFinite(input.lifetimeHours) || input.lifetimeHours <= 0 || input.lifetimeHours > 24)) {
+    throw new Error('Snaps can remain active for up to 24 hours.');
+  }
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sign in before uploading.');
@@ -175,15 +184,18 @@ export async function createMediaUploadJob(input: CreateMediaUploadInput): Promi
   }
 
   const objectName = id + '-' + fileName;
-  const objectPath = input.purpose === 'video-post'
-    ? user.id + '/' + objectName
-    : input.conversationId + '/' + user.id + '/' + objectName;
+  const objectPath = input.purpose === 'chat-attachment'
+    ? input.conversationId + '/' + user.id + '/' + objectName
+    : user.id + '/' + objectName;
+  const bucket = input.purpose === 'video-post'
+    ? 'videos'
+    : input.purpose === 'snap' ? 'snaps' : 'chat-attachments';
 
   const job: MediaUploadJob = {
     id,
     ownerId: user.id,
     purpose: input.purpose,
-    bucket: input.purpose === 'video-post' ? 'videos' : 'chat-attachments',
+    bucket,
     objectPath,
     stagedUri: stagedFile.uri,
     fileName,
@@ -195,6 +207,7 @@ export async function createMediaUploadJob(input: CreateMediaUploadInput): Promi
     caption: input.purpose === 'video-post' ? (input.caption || '').trim() : undefined,
     conversationId: input.conversationId,
     mediaType: input.mediaType,
+    lifetimeHours: input.purpose === 'snap' ? (input.lifetimeHours ?? 24) : undefined,
   };
 
   try {
@@ -375,7 +388,7 @@ async function uploadWithTus(
   });
 }
 
-async function finalizeUpload(job: MediaUploadJob): Promise<VideoPost | ChatMessage> {
+async function finalizeUpload(job: MediaUploadJob): Promise<VideoPost | ChatMessage | Snap> {
   if (job.purpose === 'video-post') {
     const { data: publicData } = supabase.storage.from('videos').getPublicUrl(job.objectPath);
     const existing = await supabase.from('videos')
@@ -394,6 +407,25 @@ async function finalizeUpload(job: MediaUploadJob): Promise<VideoPost | ChatMess
     }).select('id,user_id,caption,video_url,thumbnail_url,created_at').single();
     if (error) throw error;
     return data as VideoPost;
+  }
+
+  if (job.purpose === 'snap') {
+    const existing = await supabase.from('snaps').select('*')
+      .eq('user_id', job.ownerId)
+      .eq('media_url', job.objectPath)
+      .maybeSingle();
+    if (existing.error) throw existing.error;
+    if (existing.data) return existing.data as Snap;
+
+    const expiresAt = new Date(Date.now() + (job.lifetimeHours ?? 24) * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase.from('snaps').insert({
+      user_id: job.ownerId,
+      media_url: job.objectPath,
+      media_type: job.mediaType,
+      expires_at: expiresAt,
+    }).select().single();
+    if (error) throw error;
+    return data as Snap;
   }
 
   const existing = await supabase.from('messages').select('*')
@@ -442,7 +474,7 @@ async function completeJob(job: MediaUploadJob) {
 export async function resumeMediaUpload(
   jobId: string,
   onProgress?: (progress: number) => void,
-): Promise<VideoPost | ChatMessage> {
+): Promise<VideoPost | ChatMessage | Snap> {
   if (activeJobs.has(jobId)) throw new Error('This upload is already running.');
   activeJobs.add(jobId);
   let job: MediaUploadJob | undefined;
@@ -488,7 +520,7 @@ export async function resumeMediaUpload(
 export async function startMediaUpload(
   input: CreateMediaUploadInput,
   onProgress?: (progress: number) => void,
-): Promise<VideoPost | ChatMessage> {
+): Promise<VideoPost | ChatMessage | Snap> {
   const job = await createMediaUploadJob(input);
   return resumeMediaUpload(job.id, onProgress);
 }
