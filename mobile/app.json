@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "PROXY",
+    "slug": "proxy-social",
+    "scheme": "proxy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "plugins": [
+      "expo-router",
+      "expo-image-picker",
+      "expo-camera",
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "default"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.proxy.social"
+    },
+    "android": {
+      "package": "com.proxy.social"
+    }
+  }
+}
