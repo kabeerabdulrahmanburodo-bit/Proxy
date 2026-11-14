@@ -50,7 +50,9 @@ export default function PendingUploadsScreen() {
         'Upload complete',
         job.purpose === 'video-post'
           ? 'Your video has been published to Discover.'
-          : 'Your chat attachment has been sent.',
+          : job.purpose === 'snap'
+            ? 'Your snap has been shared with your followers.'
+            : 'Your chat attachment has been sent.',
       );
     } catch (error) {
       Alert.alert('Upload could not finish', error instanceof Error ? error.message : 'Check your connection and try again.');
