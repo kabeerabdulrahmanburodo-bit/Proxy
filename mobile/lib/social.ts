@@ -377,7 +377,7 @@ export async function createSnap(mediaPath: string, mediaType: 'image' | 'video'
     throw new Error('Snaps can remain active for up to 24 hours.');
   }
   const pathParts = mediaPath.split('/');
-  if (/^https?:\\/\\//i.test(mediaPath) || pathParts.length !== 2 ||
+  if ((mediaPath.startsWith('http://') || mediaPath.startsWith('https://')) || pathParts.length !== 2 ||
       pathParts[0] !== user.id || !pathParts[1]) {
     throw new Error('Snap media must be uploaded to your own private Storage folder.');
   }
