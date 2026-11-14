@@ -370,12 +370,26 @@ export async function trackConversationOnline(
   if (result !== 'ok') console.warn('Could not update online status:', result);
 }
 
-export async function createSnap(mediaUrl: string, mediaType: 'image' | 'video', lifetimeHours = 24) {
+export async function createSnap(mediaPath: string, mediaType: 'image' | 'video', lifetimeHours = 24) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sign in first.');
+  if (!Number.isFinite(lifetimeHours) || lifetimeHours <= 0 || lifetimeHours > 24) {
+    throw new Error('Snaps can remain active for up to 24 hours.');
+  }
+  const pathParts = mediaPath.split('/');
+  if (/^https?:\\/\\//i.test(mediaPath) || pathParts.length !== 2 ||
+      pathParts[0] !== user.id || !pathParts[1]) {
+    throw new Error('Snap media must be uploaded to your own private Storage folder.');
+  }
+
+  const existing = await supabase.from('snaps').select('*')
+    .eq('user_id', user.id).eq('media_url', mediaPath).maybeSingle();
+  if (existing.error) throw existing.error;
+  if (existing.data) return existing.data;
+
   const expiresAt = new Date(Date.now() + lifetimeHours * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase.from('snaps')
-    .insert({ user_id: user.id, media_url: mediaUrl, media_type: mediaType, expires_at: expiresAt })
+    .insert({ user_id: user.id, media_url: mediaPath, media_type: mediaType, expires_at: expiresAt })
     .select().single();
   if (error) throw error;
   return data;
