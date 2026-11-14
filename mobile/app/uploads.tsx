@@ -86,7 +86,7 @@ export default function PendingUploadsScreen() {
               <View key={job.id} style={{ backgroundColor: '#18181b', borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#303036' }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={{ color: purple, fontSize: 10, fontWeight: '900', letterSpacing: 1 }}>
-                    {job.purpose === 'video-post' ? 'VIDEO POST' : 'CHAT ATTACHMENT'}
+                    {job.purpose === 'video-post' ? 'VIDEO POST' : job.purpose === 'snap' ? '24-HOUR SNAP' : 'CHAT ATTACHMENT'}
                   </Text>
                   <Text style={{ color: muted, fontSize: 10 }}>{formatBytes(job.fileSize)}</Text>
                 </View>
