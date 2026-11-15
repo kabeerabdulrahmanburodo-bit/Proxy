@@ -43,3 +43,16 @@ export type Snap = {
   id: string; user_id: string; media_url: string; media_type: 'image' | 'video';
   expires_at: string; created_at: string;
 };
+
+
+export type SnapStory = Snap & {
+  profiles?: Pick<Profile, 'username' | 'display_name' | 'avatar_url'>;
+};
+
+export type SnapStoryGroup = {
+  user_id: string;
+  username: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  snaps: SnapStory[];
+};
