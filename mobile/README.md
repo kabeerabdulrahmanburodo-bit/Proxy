@@ -16,7 +16,7 @@ cp .env.example .env
 npx expo start
 ~~~
 
-In Supabase SQL Editor, run migrations 0001 through 0010 in filename order. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
+In Supabase SQL Editor, run migrations 0001 through 0011 in filename order. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
 
 ## Current implementation
 - Expo Router mobile shell with Discover, Chats, Snaps and Profile tabs
@@ -36,6 +36,8 @@ In Supabase SQL Editor, run migrations 0001 through 0010 in filename order. In A
 - Periodic watch-time and completion signals written to video_views
 - Persistent upload queue for feed videos, chat attachments and 24-hour snaps, with progress, retry, local file staging, and resume after app restarts
 - Resumable Snap photo/video uploads to the private `snaps` bucket, with 24-hour expiry metadata and owner/follower-scoped media access
+- Active Snap story tray grouped by creator, with sequential photo/video playback, expiry-aware advancement and short-lived signed URLs
+- Per-viewer Snap receipts recorded once per story; owners can see the view count for their own Snaps
 - Device push registration, per-category notification preferences and push tap navigation
 
 ## Messaging behavior and security
@@ -74,10 +76,15 @@ If a push delivery attempt fails, the outbox records the failure and attempt cou
 ## Video feed behavior and limits
 The feed prioritizes followed creators, then recent posts. Supabase RLS controls which public and followed-only rows a signed-in user can read. This is a starter ranking, not a machine-learning recommendation system. Watch metrics are sampled while a video is actively playing; short sessions under the five-second sampling interval may not be recorded. Feed video publishing now uses resumable TUS chunks rather than loading the entire clip into a Blob. For production, add native OS-managed background transfer, moderation, transcoding, thumbnails and CDN delivery.
 
+## Snap story viewing and receipts
+The Snaps tab loads only unexpired rows visible through the authenticated user's `snaps` RLS policy (their own stories and stories from followed creators). Stories are grouped by creator and ordered oldest-to-newest within each creator. The viewer advances through photos after five seconds, plays videos until the player reaches the end, and skips a story when its `expires_at` is reached. New object-path rows receive a five-minute signed URL from the private `snaps` bucket; signing is authorized by Storage RLS. Legacy rows that still contain signed URLs are accepted only when the URL belongs to this Supabase project and its signed `snaps` object endpoint, but the old token cannot be refreshed after it expires.
+
+A viewer receipt is inserted once per `(snap_id, viewer_id)` pair. Migration `0011_snap_story_views.sql` tightens the insert policy so an authenticated user can only record a view for an active Snap they can currently see. The Snap owner can count receipts for their own story; viewers cannot enumerate other viewers. No client service-role access is used.
+
 ## Important production work still required
-1. Add native OS-managed background transfer; the current queue resumes in the foreground after app restarts but does not run while the OS suspends the app.
-2. Replace starter feed ordering with a server-side recommendation pipeline using watch duration, completion, skips, follows, likes, freshness, safety and diversity.
-3. Add an automated scheduled cleanup job for expired snap rows and their private Storage objects. Expiry filtering alone does not physically delete media.
+1. Add automated deletion of expired Snap rows and their private Storage objects; the viewer hides expired stories, but expiry filtering alone does not physically delete media.
+2. Add native OS-managed background transfer; the current queue resumes in the foreground after app restarts but does not run while the OS suspends the app.
+3. Replace starter feed ordering with a server-side recommendation pipeline using watch duration, completion, skips, follows, likes, freshness, safety and diversity.
 4. Implement WebRTC calling with a native WebRTC module, signaling, STUN/TURN credentials, call lifecycle, permissions, reconnect handling and abuse controls. Native WebRTC is not supported in Expo Go; use an Expo development build / EAS Build.
 5. Add automated tests, error reporting, rate limits, moderation/report flows, account deletion/export, privacy policy, terms and load/security testing.
 
@@ -89,6 +96,6 @@ The feed prioritizes followed creators, then recent posts. Supabase RLS controls
 - Supabase Realtime message subscriptions require the messages and message_reads tables to be in the Realtime publication; migrations add them if absent.
 
 ## Suggested next milestones
-1. Add native background uploads and resumable Snap media publishing.
-2. Add WebRTC calls with an Expo development build.
-3. Ship feed ranking, moderation and in-app notification history.
+1. Add automated expired-Snap cleanup and native OS-managed background uploads.
+2. Add video transcoding, thumbnails and CDN delivery.
+3. Implement WebRTC calls with an Expo development build.
