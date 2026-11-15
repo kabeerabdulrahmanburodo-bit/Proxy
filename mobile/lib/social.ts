@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { startMediaUpload } from './uploads';
 import type {
   ChatMessage, ConversationDetails, ConversationPresence, ConversationSummary, MessageReadReceipt,
-  UserSearchResult, VideoPost,
+  Snap, SnapStory, SnapStoryGroup, UserSearchResult, VideoPost,
 } from './types';
 
 export const MESSAGE_PAGE_SIZE = 30;
