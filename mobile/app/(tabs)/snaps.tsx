@@ -168,9 +168,7 @@ export default function Snaps() {
         ) : (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 18, paddingVertical: 5 }}>
             {stories.map(group => {
-              const label = group.user_id === stories[0]?.user_id && group.display_name
-                ? group.display_name
-                : group.display_name || group.username;
+              const label = group.display_name || group.username;
               return (
                 <Pressable key={group.user_id} onPress={() => openStory(group)} style={{ width: 76, alignItems: 'center' }}>
                   <View style={{ width: 68, height: 68, borderRadius: 34, padding: 3, borderWidth: 2, borderColor: purple, alignItems: 'center', justifyContent: 'center' }}>
@@ -181,7 +179,7 @@ export default function Snaps() {
                     </View>
                   </View>
                   <Text numberOfLines={1} style={{ color: white, fontSize: 10, fontWeight: '700', marginTop: 8, maxWidth: 76 }}>
-                    {group.user_id === stories[0]?.user_id ? 'Your story' : '@' + group.username}
+                    {group.is_own ? 'Your story' : '@' + group.username}
                   </Text>
                   <Text style={{ color: muted, fontSize: 9, marginTop: 3 }}>{group.snaps.length} {group.snaps.length === 1 ? 'snap' : 'snaps'}</Text>
                 </Pressable>
