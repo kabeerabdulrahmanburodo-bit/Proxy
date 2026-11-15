@@ -41,7 +41,7 @@ export type ConversationDetails = {
 };
 export type Snap = {
   id: string; user_id: string; media_url: string; media_type: 'image' | 'video';
-  expires_at: string; created_at: string;
+  caption: string | null; expires_at: string; created_at: string;
 };
 
 
