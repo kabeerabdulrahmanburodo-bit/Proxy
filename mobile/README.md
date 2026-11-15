@@ -91,7 +91,7 @@ A viewer receipt is inserted once per `(snap_id, viewer_id)` pair. Migration `00
 ## Media and privacy notes
 - Video bucket is public for playback. Do not place private media there.
 - Chat attachments use a private bucket. Do not persist signed URLs; they grant bearer access until expiration. Storage RLS is required for minting signed URLs.
-- Snap bucket is private. New snap rows store the object path, not a signed URL. Storage RLS allows the owner or a follower with access to an unexpired snap row to mint a short-lived signed URL. Legacy rows created before migration 0010 may still contain signed URLs until those rows expire.
+- Snap bucket is private. New snap rows store the object path, not a signed URL. Storage RLS allows the owner or a follower with access to an unexpired snap row to mint a short-lived signed URL. Legacy rows may still contain signed URLs; their original tokens cannot be refreshed after they expire.
 - Set explicit Supabase bucket size/MIME limits appropriate to your launch. Configure storage lifecycle cleanup.
 - Supabase Realtime message subscriptions require the messages and message_reads tables to be in the Realtime publication; migrations add them if absent.
 
