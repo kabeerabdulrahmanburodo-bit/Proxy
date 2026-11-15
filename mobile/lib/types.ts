@@ -54,5 +54,6 @@ export type SnapStoryGroup = {
   username: string;
   display_name: string | null;
   avatar_url: string | null;
+  is_own: boolean;
   snaps: SnapStory[];
 };
