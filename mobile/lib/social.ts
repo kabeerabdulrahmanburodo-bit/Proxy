@@ -415,6 +415,7 @@ export async function getActiveSnapStories(): Promise<SnapStoryGroup[]> {
       username: profile?.username ?? 'proxy_user',
       display_name: profile?.display_name ?? null,
       avatar_url: profile?.avatar_url ?? null,
+      is_own: snap.user_id === user.id,
       snaps: [],
     };
     group.snaps.push(snap);
@@ -422,8 +423,8 @@ export async function getActiveSnapStories(): Promise<SnapStoryGroup[]> {
   });
 
   return [...groups.values()].sort((a, b) => {
-    if (a.user_id === user.id) return -1;
-    if (b.user_id === user.id) return 1;
+    if (a.is_own) return -1;
+    if (b.is_own) return 1;
     const aLatest = Date.parse(a.snaps[a.snaps.length - 1]?.created_at ?? '');
     const bLatest = Date.parse(b.snaps[b.snaps.length - 1]?.created_at ?? '');
     return bLatest - aLatest;
