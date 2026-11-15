@@ -112,20 +112,22 @@ export default function SnapViewerScreen() {
     setViewCount(null);
 
     void resolveSnapMediaUrl(current)
-      .then(uri => { if (active) setMediaUri(uri); })
+      .then(uri => {
+        if (!active) return;
+        setMediaUri(uri);
+        if (viewerId && current.user_id !== viewerId) {
+          void recordSnapView(current.id).catch(viewError => {
+            console.warn('Could not record Snap view:', viewError instanceof Error ? viewError.message : viewError);
+          });
+        } else if (viewerId && current.user_id === viewerId) {
+          void getSnapViewCount(current.id)
+            .then(count => { if (active) setViewCount(count); })
+            .catch(countError => console.warn('Could not load Snap audience count:', countError));
+        }
+      })
       .catch(resolveError => {
         if (active) setError(resolveError instanceof Error ? resolveError.message : 'Snap media could not be opened.');
       });
-
-    if (viewerId && current.user_id !== viewerId) {
-      void recordSnapView(current.id).catch(viewError => {
-        console.warn('Could not record Snap view:', viewError instanceof Error ? viewError.message : viewError);
-      });
-    } else if (viewerId && current.user_id === viewerId) {
-      void getSnapViewCount(current.id)
-        .then(count => { if (active) setViewCount(count); })
-        .catch(countError => console.warn('Could not load Snap audience count:', countError));
-    }
 
     const expiresIn = Math.max(0, Date.parse(current.expires_at) - Date.now());
     const expiryTimer = setTimeout(next, expiresIn);
