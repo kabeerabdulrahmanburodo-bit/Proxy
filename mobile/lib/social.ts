@@ -403,7 +403,7 @@ export async function getActiveSnapStories(): Promise<SnapStoryGroup[]> {
   const { data, error } = await supabase.from('snaps')
     .select('id,user_id,media_url,media_type,caption,expires_at,created_at,profiles(username,display_name,avatar_url)')
     .gt('expires_at', new Date().toISOString())
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(500);
   if (error) throw error;
 
@@ -422,6 +422,7 @@ export async function getActiveSnapStories(): Promise<SnapStoryGroup[]> {
     groups.set(snap.user_id, group);
   });
 
+  groups.forEach(group => group.snaps.reverse());
   return [...groups.values()].sort((a, b) => {
     if (a.is_own) return -1;
     if (b.is_own) return 1;
@@ -437,10 +438,10 @@ export async function getActiveSnapsForUser(userId: string): Promise<SnapStory[]
     .select('id,user_id,media_url,media_type,caption,expires_at,created_at,profiles(username,display_name,avatar_url)')
     .eq('user_id', userId)
     .gt('expires_at', new Date().toISOString())
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(100);
   if (error) throw error;
-  return (data ?? []) as unknown as SnapStory[];
+  return ((data ?? []) as unknown as SnapStory[]).reverse();
 }
 
 export async function resolveSnapMediaUrl(snap: Snap): Promise<string> {
