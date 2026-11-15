@@ -394,3 +394,132 @@ export async function createSnap(mediaPath: string, mediaType: 'image' | 'video'
   if (error) throw error;
   return data;
 }
+
+
+export async function getActiveSnapStories(): Promise<SnapStoryGroup[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to view Snaps.');
+
+  const { data, error } = await supabase.from('snaps')
+    .select('id,user_id,media_url,media_type,caption,expires_at,created_at,profiles(username,display_name,avatar_url)')
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: true })
+    .limit(500);
+  if (error) throw error;
+
+  const groups = new Map<string, SnapStoryGroup>();
+  ((data ?? []) as unknown as SnapStory[]).forEach(snap => {
+    const profile = snap.profiles;
+    const group = groups.get(snap.user_id) ?? {
+      user_id: snap.user_id,
+      username: profile?.username ?? 'proxy_user',
+      display_name: profile?.display_name ?? null,
+      avatar_url: profile?.avatar_url ?? null,
+      snaps: [],
+    };
+    group.snaps.push(snap);
+    groups.set(snap.user_id, group);
+  });
+
+  return [...groups.values()].sort((a, b) => {
+    if (a.user_id === user.id) return -1;
+    if (b.user_id === user.id) return 1;
+    const aLatest = Date.parse(a.snaps[a.snaps.length - 1]?.created_at ?? '');
+    const bLatest = Date.parse(b.snaps[b.snaps.length - 1]?.created_at ?? '');
+    return bLatest - aLatest;
+  });
+}
+
+export async function getActiveSnapsForUser(userId: string): Promise<SnapStory[]> {
+  if (!userId) throw new Error('A Snap creator is required.');
+  const { data, error } = await supabase.from('snaps')
+    .select('id,user_id,media_url,media_type,caption,expires_at,created_at,profiles(username,display_name,avatar_url)')
+    .eq('user_id', userId)
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: true })
+    .limit(100);
+  if (error) throw error;
+  return (data ?? []) as unknown as SnapStory[];
+}
+
+export async function resolveSnapMediaUrl(snap: Snap): Promise<string> {
+  if (Date.parse(snap.expires_at) <= Date.now()) {
+    throw new Error('This Snap has expired.');
+  }
+
+  const mediaPath = snap.media_url.trim();
+  if (mediaPath.startsWith('https://')) {
+    let mediaUrl: URL;
+    let projectUrl: URL;
+    try {
+      mediaUrl = new URL(mediaPath);
+      projectUrl = new URL(process.env.EXPO_PUBLIC_SUPABASE_URL ?? '');
+    } catch {
+      throw new Error('This Snap has an invalid media link.');
+    }
+    if (
+      mediaUrl.origin !== projectUrl.origin ||
+      !mediaUrl.pathname.startsWith('/storage/v1/object/sign/snaps/')
+    ) {
+      throw new Error('This Snap does not point to an approved private media object.');
+    }
+    return mediaPath;
+  }
+
+  const parts = mediaPath.split('/');
+  if (
+    parts.length !== 2 ||
+    parts[0] !== snap.user_id ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,250}$/.test(parts[1]) ||
+    parts[1] === '.' ||
+    parts[1] === '..'
+  ) {
+    throw new Error('This Snap has an invalid private Storage path.');
+  }
+
+  const { data, error } = await supabase.storage.from('snaps').createSignedUrl(mediaPath, 300);
+  if (error) throw error;
+  if (!data?.signedUrl) throw new Error('A temporary Snap viewing link could not be created.');
+  return data.signedUrl;
+}
+
+export async function recordSnapView(snapId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to view Snaps.');
+
+  const { data: snap, error: snapError } = await supabase.from('snaps')
+    .select('id,user_id')
+    .eq('id', snapId)
+    .gt('expires_at', new Date().toISOString())
+    .maybeSingle();
+  if (snapError) throw snapError;
+  if (!snap) throw new Error('This Snap is unavailable or has expired.');
+  if (snap.user_id === user.id) return;
+
+  const { error } = await supabase.from('snap_views').insert({
+    snap_id: snapId,
+    viewer_id: user.id,
+  });
+  // A viewer is recorded once per Snap; revisiting must not create duplicate views.
+  if (error && error.code !== '23505') throw error;
+}
+
+export async function getSnapViewCount(snapId: string): Promise<number> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to view Snap insights.');
+
+  const { data: snap, error: snapError } = await supabase.from('snaps')
+    .select('user_id')
+    .eq('id', snapId)
+    .maybeSingle();
+  if (snapError) throw snapError;
+  if (!snap || snap.user_id !== user.id) {
+    throw new Error('Only the Snap owner can view its audience count.');
+  }
+
+  const { count, error } = await supabase.from('snap_views')
+    .select('viewer_id', { count: 'exact', head: true })
+    .eq('snap_id', snapId);
+  if (error) throw error;
+  return count ?? 0;
+}
