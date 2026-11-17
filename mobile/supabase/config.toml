@@ -1,2 +1,5 @@
 [functions.send-push-notification]
 verify_jwt = false
+
+[functions.cleanup-expired-snaps]
+verify_jwt = false
