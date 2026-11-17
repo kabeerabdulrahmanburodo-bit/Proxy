@@ -10,6 +10,8 @@ type ExpiredSnap = {
 
 const MAX_ROWS_PER_RUN = 500;
 const REMOVE_BATCH_SIZE = 500;
+const ACTIVE_REFERENCE_PAGE_SIZE = 500;
+const MAX_ACTIVE_REFERENCES_PER_OWNER_BATCH = 10000;
 
 function json(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -123,20 +125,26 @@ Deno.serve(async request => {
     const activePaths = new Set<string>();
     for (let offset = 0; objectPaths.length > 0 && offset < ownerIds.length; offset += 50) {
       const ownerBatch = ownerIds.slice(offset, offset + 50);
-      const { data: activeSnaps, error: activeError } = await admin
-        .from("snaps")
-        .select("user_id,media_url")
-        .in("user_id", ownerBatch)
-        .gt("expires_at", cutoff)
-        .limit(1000);
-      if (activeError) throw activeError;
-      if ((activeSnaps ?? []).length === 1000) {
+      let activeOffset = 0;
+      while (activeOffset < MAX_ACTIVE_REFERENCES_PER_OWNER_BATCH) {
+        const { data: activeSnaps, error: activeError } = await admin
+          .from("snaps")
+          .select("user_id,media_url")
+          .in("user_id", ownerBatch)
+          .gt("expires_at", cutoff)
+          .order("id", { ascending: true })
+          .range(activeOffset, activeOffset + ACTIVE_REFERENCE_PAGE_SIZE - 1);
+        if (activeError) throw activeError;
+        for (const activeSnap of activeSnaps ?? []) {
+          const activePath = getSnapStoragePath(activeSnap.media_url, activeSnap.user_id, supabaseUrl);
+          if (activePath) activePaths.add(activePath);
+        }
+        if ((activeSnaps ?? []).length < ACTIVE_REFERENCE_PAGE_SIZE) break;
+        activeOffset += ACTIVE_REFERENCE_PAGE_SIZE;
+      }
+      if (activeOffset >= MAX_ACTIVE_REFERENCES_PER_OWNER_BATCH) {
         // Fail closed rather than risk truncating the active-reference check.
         return json({ error: "Too many active Snap references for a safe cleanup pass" }, 503);
-      }
-      for (const activeSnap of activeSnaps ?? []) {
-        const activePath = getSnapStoragePath(activeSnap.media_url, activeSnap.user_id, supabaseUrl);
-        if (activePath) activePaths.add(activePath);
       }
     }
 
