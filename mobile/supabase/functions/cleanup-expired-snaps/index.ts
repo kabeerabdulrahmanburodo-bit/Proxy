@@ -115,13 +115,18 @@ Deno.serve(async request => {
 
     // Do not remove a file if a still-active Snap also references it. This also
     // handles legacy signed URLs whose token differs but whose object path is the same.
-    const ownerIds = Array.from(new Set(expiredSnaps.map(snap => snap.user_id)));
+    const ownerIds = Array.from(new Set(
+      expiredSnaps
+        .filter(snap => getSnapStoragePath(snap.media_url, snap.user_id, supabaseUrl) !== null)
+        .map(snap => snap.user_id),
+    ));
     const activePaths = new Set<string>();
-    if (objectPaths.length > 0 && ownerIds.length > 0) {
+    for (let offset = 0; objectPaths.length > 0 && offset < ownerIds.length; offset += 50) {
+      const ownerBatch = ownerIds.slice(offset, offset + 50);
       const { data: activeSnaps, error: activeError } = await admin
         .from("snaps")
         .select("user_id,media_url")
-        .in("user_id", ownerIds)
+        .in("user_id", ownerBatch)
         .gt("expires_at", cutoff)
         .limit(1000);
       if (activeError) throw activeError;
