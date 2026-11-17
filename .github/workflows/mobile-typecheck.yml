@@ -37,6 +37,9 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Type-check push delivery Edge Function
+      - name: Type-check Supabase Edge Functions
         working-directory: mobile
-        run: deno check supabase/functions/send-push-notification/index.ts
+        run: deno check supabase/functions/send-push-notification/index.ts supabase/functions/cleanup-expired-snaps/index.ts
+      - name: Test Snap cleanup path validation
+        working-directory: mobile
+        run: deno test supabase/functions/cleanup-expired-snaps/index.test.ts
