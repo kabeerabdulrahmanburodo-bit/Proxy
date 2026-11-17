@@ -110,10 +110,55 @@ Deno.serve(async request => {
     let rowsDeleted = invalidPathRowsDeleted;
     let storageFailedBatches = 0;
     let databaseFailedBatches = 0;
+    let activeReferencesProtected = 0;
     const objectPaths = Array.from(idsByPath.keys());
 
-    for (let offset = 0; offset < objectPaths.length; offset += REMOVE_BATCH_SIZE) {
-      const batchPaths = objectPaths.slice(offset, offset + REMOVE_BATCH_SIZE);
+    // Do not remove a file if a still-active Snap also references it. This also
+    // handles legacy signed URLs whose token differs but whose object path is the same.
+    const ownerIds = Array.from(new Set(expiredSnaps.map(snap => snap.user_id)));
+    const activePaths = new Set<string>();
+    if (objectPaths.length > 0 && ownerIds.length > 0) {
+      const { data: activeSnaps, error: activeError } = await admin
+        .from("snaps")
+        .select("user_id,media_url")
+        .in("user_id", ownerIds)
+        .gt("expires_at", cutoff)
+        .limit(1000);
+      if (activeError) throw activeError;
+      if ((activeSnaps ?? []).length === 1000) {
+        // Fail closed rather than risk truncating the active-reference check.
+        return json({ error: "Too many active Snap references for a safe cleanup pass" }, 503);
+      }
+      for (const activeSnap of activeSnaps ?? []) {
+        const activePath = getSnapStoragePath(activeSnap.media_url, activeSnap.user_id, supabaseUrl);
+        if (activePath) activePaths.add(activePath);
+      }
+    }
+
+    const protectedPaths = objectPaths.filter(path => activePaths.has(path));
+    activeReferencesProtected = protectedPaths.length;
+    for (const path of protectedPaths) {
+      const snapIds = idsByPath.get(path) ?? [];
+      const { data: deleted, error: deleteError } = await admin
+        .from("snaps")
+        .delete()
+        .in("id", snapIds)
+        .lte("expires_at", cutoff)
+        .select("id");
+      if (deleteError) {
+        databaseFailedBatches += 1;
+        console.error("Expired Snap rows sharing an active object could not be deleted", {
+          rowCount: snapIds.length,
+          message: deleteError.message.slice(0, 240),
+        });
+        continue;
+      }
+      rowsDeleted += deleted?.length ?? 0;
+    }
+
+    const deletablePaths = objectPaths.filter(path => !activePaths.has(path));
+    for (let offset = 0; offset < deletablePaths.length; offset += REMOVE_BATCH_SIZE) {
+      const batchPaths = deletablePaths.slice(offset, offset + REMOVE_BATCH_SIZE);
       const snapIds = batchPaths.flatMap(path => idsByPath.get(path) ?? []);
 
       const { error: storageError } = await admin.storage.from("snaps").remove(batchPaths);
@@ -151,6 +196,7 @@ Deno.serve(async request => {
       objectsRemoved,
       rowsDeleted,
       invalidPathRowsDeleted,
+      activeReferencesProtected,
       storageFailedBatches,
       databaseFailedBatches,
       batchLimitReached: expiredSnaps.length === MAX_ROWS_PER_RUN,
