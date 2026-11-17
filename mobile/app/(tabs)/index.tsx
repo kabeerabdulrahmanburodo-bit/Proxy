@@ -19,23 +19,28 @@ function VideoCard({ post, active }: { post: VideoPost; active: boolean }) {
     if (!active) return;
     let watched = 0;
     let lastSample = Date.now();
-    let completed = false;
+    const completionSubscription = player.addListener('playToEnd', () => {
+      // The player loops, so use the native end event instead of guessing from
+      // currentTime inside a five-second polling window.
+      const finalSeconds = Math.floor(watched);
+      watched -= finalSeconds;
+      void recordVideoView(post.id, finalSeconds, true);
+    });
     const timer = setInterval(() => {
       const now = Date.now();
       const elapsed = Math.min((now - lastSample) / 1000, 6);
       lastSample = now;
       if (player.playing) watched += elapsed;
-      if (player.duration > 0 && player.currentTime / player.duration >= 0.9) completed = true;
       if (watched >= 5) {
         const batch = Math.floor(watched);
         watched -= batch;
-        void recordVideoView(post.id, batch, completed);
-        completed = false;
+        void recordVideoView(post.id, batch, false);
       }
     }, 5000);
     return () => {
       clearInterval(timer);
-      if (watched > 0 || completed) void recordVideoView(post.id, watched, completed);
+      completionSubscription.remove();
+      if (watched > 0) void recordVideoView(post.id, watched, false);
     };
   }, [active, player, post.id]);
 
@@ -89,6 +94,9 @@ export default function Feed() {
           data={posts}
           keyExtractor={post => post.id}
           pagingEnabled
+          initialNumToRender={2}
+          maxToRenderPerBatch={2}
+          windowSize={3}
           snapToAlignment="start"
           decelerationRate="fast"
           viewabilityConfig={viewabilityConfig}
