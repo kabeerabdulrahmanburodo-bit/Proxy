@@ -16,7 +16,7 @@ cp .env.example .env
 npx expo start
 ~~~
 
-In Supabase SQL Editor, run migrations 0001 through 0011 in filename order. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
+In Supabase SQL Editor, run migrations 0001 through 0011 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
 
 ## Current implementation
 - Expo Router mobile shell with Discover, Chats, Snaps and Profile tabs
@@ -64,7 +64,7 @@ Migration 0009 creates:
 PostgreSQL creates in-app notification rows for new direct/group messages, follows, video likes and video comments. An insert trigger adds eligible events to the private outbox unless that category is disabled. The Edge Function claims an outbox row atomically, sends Expo Push Service messages in batches, disables tokens reported as DeviceNotRegistered, and records Expo ticket acceptance/failure. An accepted Expo ticket is not proof of final device delivery; push receipt polling is not implemented yet. A webhook secret protects the Edge Function endpoint; the service-role key remains server-side.
 
 ### Push deployment (required; not completed by this repository commit)
-1. Run migrations 0001 through 0010 in order.
+1. Run migrations 0001 through 0012 in order, following the Snap cleanup prerequisites below before applying 0012.
 2. Link the Supabase project from mobile/ with the Supabase CLI and deploy supabase/functions/send-push-notification. Only this function has JWT verification disabled; it requires the x-proxy-webhook-secret header.
 3. Set the Edge Function secret PROXY_PUSH_WEBHOOK_SECRET to a long random value. Supabase supplies SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Edge Functions; do not copy either into the app.
 4. In Supabase Dashboard, create a Database Webhook for INSERT on public.push_outbox, targeting the deployed send-push-notification function URL. Add a custom header named x-proxy-webhook-secret with the same secret. Do not expose that secret in the mobile app or repository.
@@ -81,12 +81,62 @@ The Snaps tab loads only unexpired rows visible through the authenticated user's
 
 A viewer receipt is inserted once per `(snap_id, viewer_id)` pair. Migration `0011_snap_story_views.sql` tightens the insert policy so an authenticated user can only record a view for an active Snap they can currently see. The Snap owner can count receipts for their own story; viewers cannot enumerate other viewers. No client service-role access is used.
 
+## Automated expired-Snap cleanup
+
+Migration `0012_snap_expiry_cleanup.sql` installs `pg_cron` and `pg_net`, adds a private audit table for malformed legacy references, and schedules `proxy-expired-snap-cleanup` every 15 minutes. The job invokes the `cleanup-expired-snaps` Edge Function.
+
+The function:
+- Scans up to 500 expired Snap rows per run.
+- Accepts only owner-folder paths in the private `snaps` bucket, including legacy signed URLs from the same Supabase project.
+- Deletes media through the Supabase Storage API in batches of at most 500 objects; it never deletes directly from `storage.objects`.
+- Deletes each matching Snap row only after its Storage removal succeeds. Failed Storage batches retain their rows for a later retry; if row deletion fails after object removal, the next run safely retries.
+- Records malformed or external legacy references in the service-role-only `snap_cleanup_issues` table, then removes their expired story rows without touching an untrusted object. These exceptional cases may require a manual orphan audit.
+
+### Cleanup deployment (required; not completed by this repository commit)
+
+Deploy the function and configure its secrets before applying migration 0012:
+
+1. From `mobile/`, link the Supabase project and deploy the function:
+   ```bash
+   supabase link --project-ref <project-ref>
+   supabase functions deploy cleanup-expired-snaps
+   ```
+2. Generate a random secret of at least 32 characters and set it as an Edge Function secret:
+   ```bash
+   supabase secrets set PROXY_SNAP_CLEANUP_SECRET="<random-secret>"
+   ```
+   The function has JWT verification disabled only because the scheduled caller uses a dedicated `x-proxy-snap-cleanup-secret` header. The handler compares that header in constant time. It uses `SUPABASE_SERVICE_ROLE_KEY` only inside the Edge Function; the mobile app never receives it.
+3. In Supabase SQL Editor, store the project URL, publishable (or legacy anon) key, and the same cleanup secret in Vault:
+   ```sql
+   select vault.create_secret('https://<project-ref>.supabase.co', 'proxy_project_url');
+   select vault.create_secret('<publishable-or-legacy-anon-key>', 'proxy_publishable_key');
+   select vault.create_secret('<same-random-secret>', 'proxy_snap_cleanup_secret');
+   ```
+   The publishable/anon key is used only for the API gateway `apikey` header; the separate random header is the actual cleanup authorization. Do not query or print decrypted Vault values.
+4. Apply `0012_snap_expiry_cleanup.sql` after the function and Vault values are ready. The migration enables `pg_cron` and `pg_net` and schedules the 15-minute job. If the project does not expose Vault or these extensions, enable them in the Supabase Dashboard first; do not replace this with direct SQL deletion from Storage tables.
+5. Verify the schedule and recent runs:
+   ```sql
+   select jobid, jobname, schedule, active
+   from cron.job
+   where jobname = 'proxy-expired-snap-cleanup';
+
+   select jobid, status, return_message, start_time
+   from cron.job_run_details
+   where jobid in (
+     select jobid from cron.job where jobname = 'proxy-expired-snap-cleanup'
+   )
+   order by start_time desc
+   limit 10;
+   ```
+
+The cron request keeps the project URL and keys in Vault rather than in the stored job command. As with other `pg_net` requests, outbound headers are queued briefly while a request is pending; keep database access restricted and rotate the cleanup secret if it is exposed. The job is bounded to 500 rows per invocation so repeated runs can drain larger backlogs without one long Edge Function execution.
+
 ## Important production work still required
-1. Add automated deletion of expired Snap rows and their private Storage objects; the viewer hides expired stories, but expiry filtering alone does not physically delete media.
+1. Deploy and monitor the scheduled Snap cleanup job; the code and migration are committed, but the live Supabase function, Vault secrets and cron execution still require project-owner setup.
 2. Add native OS-managed background transfer; the current queue resumes in the foreground after app restarts but does not run while the OS suspends the app.
 3. Replace starter feed ordering with a server-side recommendation pipeline using watch duration, completion, skips, follows, likes, freshness, safety and diversity.
 4. Implement WebRTC calling with a native WebRTC module, signaling, STUN/TURN credentials, call lifecycle, permissions, reconnect handling and abuse controls. Native WebRTC is not supported in Expo Go; use an Expo development build / EAS Build.
-5. Add automated tests, error reporting, rate limits, moderation/report flows, account deletion/export, privacy policy, terms and load/security testing.
+5. Add broader automated integration tests, error reporting, rate limits, moderation/report flows, account deletion/export, privacy policy, terms and load/security testing.
 
 ## Media and privacy notes
 - Video bucket is public for playback. Do not place private media there.
@@ -96,6 +146,6 @@ A viewer receipt is inserted once per `(snap_id, viewer_id)` pair. Migration `00
 - Supabase Realtime message subscriptions require the messages and message_reads tables to be in the Realtime publication; migrations add them if absent.
 
 ## Suggested next milestones
-1. Add automated expired-Snap cleanup and native OS-managed background uploads.
+1. Add native OS-managed background uploads and abandoned TUS/local-file cleanup.
 2. Add video transcoding, thumbnails and CDN delivery.
 3. Implement WebRTC calls with an Expo development build.
