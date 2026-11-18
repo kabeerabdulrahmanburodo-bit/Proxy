@@ -16,7 +16,7 @@ cp .env.example .env
 npx expo start
 ~~~
 
-In Supabase SQL Editor, run migrations 0001 through 0011 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
+In Supabase SQL Editor, run migrations 0001 through 0013 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
 
 ## Current implementation
 - Expo Router mobile shell with Discover, Chats, Snaps and Profile tabs
@@ -64,7 +64,7 @@ Migration 0009 creates:
 PostgreSQL creates in-app notification rows for new direct/group messages, follows, video likes and video comments. An insert trigger adds eligible events to the private outbox unless that category is disabled. The Edge Function claims an outbox row atomically, sends Expo Push Service messages in batches, disables tokens reported as DeviceNotRegistered, and records Expo ticket acceptance/failure. An accepted Expo ticket is not proof of final device delivery; push receipt polling is not implemented yet. A webhook secret protects the Edge Function endpoint; the service-role key remains server-side.
 
 ### Push deployment (required; not completed by this repository commit)
-1. Run migrations 0001 through 0012 in order, following the Snap cleanup prerequisites below before applying 0012.
+1. Run migrations 0001 through 0013 in order, following the Snap cleanup prerequisites below before applying 0012.
 2. Link the Supabase project from mobile/ with the Supabase CLI and deploy supabase/functions/send-push-notification. Only this function has JWT verification disabled; it requires the x-proxy-webhook-secret header.
 3. Set the Edge Function secret PROXY_PUSH_WEBHOOK_SECRET to a long random value. Supabase supplies SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Edge Functions; do not copy either into the app.
 4. In Supabase Dashboard, create a Database Webhook for INSERT on public.push_outbox, targeting the deployed send-push-notification function URL. Add a custom header named x-proxy-webhook-secret with the same secret. Do not expose that secret in the mobile app or repository.
@@ -134,7 +134,7 @@ The cron request keeps the project URL and keys in Vault rather than in the stor
 ## Important production work still required
 1. Deploy and monitor the scheduled Snap cleanup job; the code and migration are committed, but the live Supabase function, Vault secrets and cron execution still require project-owner setup.
 2. Add native OS-managed background transfer; the current queue resumes in the foreground after app restarts but does not run while the OS suspends the app.
-3. Replace starter feed ordering with a server-side recommendation pipeline using watch duration, completion, skips, follows, likes, freshness, safety and diversity.
+3. Extend the feed ranking with skip signals, server-side pagination, moderation eligibility and stronger safety/diversity controls.
 4. Implement WebRTC calling with a native WebRTC module, signaling, STUN/TURN credentials, call lifecycle, permissions, reconnect handling and abuse controls. Native WebRTC is not supported in Expo Go; use an Expo development build / EAS Build.
 5. Add broader automated integration tests, error reporting, rate limits, moderation/report flows, account deletion/export, privacy policy, terms and load/security testing.
 
