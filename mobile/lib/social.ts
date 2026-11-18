@@ -10,6 +10,38 @@ export const MESSAGE_PAGE_SIZE = 30;
 export async function getVideoFeed(limit = 20): Promise<VideoPost[]> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sign in to view your feed.');
+  const requestedLimit = Math.max(1, Math.min(50, Math.floor(limit) || 20));
+
+  const { data: ranked, error: rankingError } = await supabase.rpc(
+    'get_personalized_video_feed',
+    { p_limit: requestedLimit },
+  );
+  if (!rankingError) {
+    return ((ranked ?? []) as Array<{
+      id: string;
+      user_id: string;
+      caption: string | null;
+      video_url: string;
+      thumbnail_url: string | null;
+      created_at: string;
+      username: string | null;
+      avatar_url: string | null;
+    }>).map(row => ({
+      id: row.id,
+      user_id: row.user_id,
+      caption: row.caption,
+      video_url: row.video_url,
+      thumbnail_url: row.thumbnail_url,
+      created_at: row.created_at,
+      profiles: { username: row.username ?? 'creator', avatar_url: row.avatar_url },
+    }));
+  }
+
+  // Keep the safe, RLS-filtered chronological feed available if migration 0013
+  // has not been applied yet. Only fall back for a missing RPC, not other errors.
+  if (rankingError.code !== 'PGRST202' && rankingError.code !== '42883') {
+    throw rankingError;
+  }
   const { data: follows, error: followsError } = await supabase
     .from('follows').select('following_id').eq('follower_id', user.id);
   if (followsError) throw followsError;
@@ -17,13 +49,12 @@ export async function getVideoFeed(limit = 20): Promise<VideoPost[]> {
   const { data, error } = await supabase.from('videos')
     .select('id,user_id,caption,video_url,thumbnail_url,created_at,profiles(username,avatar_url)')
     .in('visibility', ['public', 'followers'])
-    .order('created_at', { ascending: false }).limit(limit * 3);
+    .order('created_at', { ascending: false }).limit(requestedLimit * 3);
   if (error) throw error;
   const posts = (data ?? []) as unknown as VideoPost[];
-  // RLS filters follower-only posts; this baseline ranking prioritizes followed creators.
   return posts.sort((a, b) =>
     Number(followingIds.includes(b.user_id)) - Number(followingIds.includes(a.user_id))
-  ).slice(0, limit);
+  ).slice(0, requestedLimit);
 }
 
 export async function publishVideo(
