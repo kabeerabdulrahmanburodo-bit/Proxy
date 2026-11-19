@@ -4,6 +4,8 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '../../lib/supabase';
+import { getBlockedUsers, unblockUser } from '../../lib/social';
+import type { BlockedUser } from '../../lib/types';
 import {
   getNotificationPreferences, isPushEnabledOnThisDevice, registerPushNotifications,
   saveNotificationPreferences, unregisterCurrentPushDevice,
@@ -32,6 +34,11 @@ export default function Profile() {
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settingsError, setSettingsError] = useState('');
+  const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
+  const [blockedLoading, setBlockedLoading] = useState(true);
+  const [blockedError, setBlockedError] = useState('');
+  const [unblockingId, setUnblockingId] = useState<string | null>(null);
+
 
   useEffect(() => {
     let active = true;
@@ -63,6 +70,40 @@ export default function Profile() {
     })();
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    void getBlockedUsers()
+      .then(rows => { if (active) setBlockedUsers(rows); })
+      .catch(error => {
+        if (active) setBlockedError(error instanceof Error ? error.message : 'Blocked accounts are unavailable.');
+      })
+      .finally(() => { if (active) setBlockedLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  function confirmUnblock(account: BlockedUser) {
+    const username = account.profile?.username ?? account.blocked_id.slice(0, 8);
+    Alert.alert('Unblock @' + username + '?', 'Their videos and stories can appear in your feed again. Follows are not restored automatically.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Unblock',
+        onPress: () => {
+          void (async () => {
+            setUnblockingId(account.blocked_id);
+            try {
+              await unblockUser(account.blocked_id);
+              setBlockedUsers(current => current.filter(row => row.blocked_id !== account.blocked_id));
+            } catch (error) {
+              Alert.alert('Unblock account', error instanceof Error ? error.message : 'Could not unblock this account.');
+            } finally {
+              setUnblockingId(null);
+            }
+          })();
+        },
+      },
+    ]);
+  }
 
   async function togglePreference(key: keyof NotificationPreferences, value: boolean) {
     const previous = preferences;
@@ -160,6 +201,40 @@ export default function Profile() {
       <Text style={{ color: muted, fontSize: 11, lineHeight: 18, marginTop: 14 }}>
         Remote push requires an EAS project ID, Apple/Google push credentials and a development or release build. Expo Go does not support remote push notifications on Android for SDK 54.
       </Text>
+
+      <View style={{ marginTop: 26, padding: 18, borderRadius: 18, backgroundColor: panel, borderWidth: 1, borderColor: '#303036' }}>
+        <Text style={{ color: white, fontSize: 16, fontWeight: '900' }}>BLOCKED ACCOUNTS</Text>
+        <Text style={{ color: muted, fontSize: 12, lineHeight: 18, marginTop: 6 }}>
+          Blocked creators cannot appear in either person’s feed or Snap stories. Existing conversations remain available.
+        </Text>
+        {blockedLoading ? <ActivityIndicator color={purple} style={{ marginTop: 18 }} /> : blockedError ? (
+          <Text style={{ color: '#fda4af', fontSize: 11, lineHeight: 17, marginTop: 12 }}>
+            {blockedError} Apply migration 0014 to enable block management.
+          </Text>
+        ) : blockedUsers.length === 0 ? (
+          <Text style={{ color: muted, fontSize: 12, marginTop: 14 }}>You have no blocked accounts.</Text>
+        ) : blockedUsers.map(account => {
+          const label = account.profile?.display_name || account.profile?.username || account.blocked_id.slice(0, 8);
+          const usernameLabel = account.profile?.username ? '@' + account.profile.username : label;
+          return (
+            <View key={account.blocked_id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#303036' }}>
+              <View style={{ flex: 1, paddingRight: 10 }}>
+                <Text style={{ color: white, fontWeight: '800', fontSize: 13 }}>{label}</Text>
+                <Text style={{ color: muted, fontSize: 11, marginTop: 3 }}>{usernameLabel}</Text>
+              </View>
+              <Pressable
+                onPress={() => confirmUnblock(account)}
+                disabled={unblockingId === account.blocked_id}
+                style={{ paddingHorizontal: 12, paddingVertical: 9, borderRadius: 10, backgroundColor: '#302844', opacity: unblockingId === account.blocked_id ? 0.5 : 1 }}
+              >
+                <Text style={{ color: purple, fontSize: 10, fontWeight: '900' }}>
+                  {unblockingId === account.blocked_id ? 'WAIT…' : 'UNBLOCK'}
+                </Text>
+              </Pressable>
+            </View>
+          );
+        })}
+      </View>
 
       <Pressable
         onPress={() => router.push('/uploads')}

@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { startMediaUpload } from './uploads';
 import type {
   ChatMessage, ConversationDetails, ConversationPresence, ConversationSummary, MessageReadReceipt,
-  Snap, SnapStory, SnapStoryGroup, UserSearchResult, VideoPost,
+  BlockedUser, Snap, SnapStory, SnapStoryGroup, UserSearchResult, VideoPost, VideoReportReason,
 } from './types';
 
 export const MESSAGE_PAGE_SIZE = 30;
@@ -83,6 +83,65 @@ export async function recordVideoView(videoId: string, watchSeconds: number, com
     video_id: videoId, user_id: user.id, watch_seconds: seconds, completed,
   });
   if (error) console.warn('Could not record video view:', error.message);
+}
+
+export async function blockUser(userId: string): Promise<void> {
+  if (!userId) throw new Error('Choose an account to block.');
+  const { data, error } = await supabase.rpc('block_user', { p_user_id: userId });
+  if (error) throw error;
+  if (data !== true) throw new Error('The account could not be blocked.');
+}
+
+export async function unblockUser(userId: string): Promise<void> {
+  if (!userId) throw new Error('Choose an account to unblock.');
+  const { data, error } = await supabase.rpc('unblock_user', { p_user_id: userId });
+  if (error) throw error;
+  if (data !== true) throw new Error('This account is no longer in your blocked list.');
+}
+
+export async function getBlockedUsers(): Promise<BlockedUser[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to manage blocked accounts.');
+
+  const { data: blocks, error } = await supabase.from('user_blocks')
+    .select('blocked_id,created_at')
+    .eq('blocker_id', user.id)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  const rows = blocks ?? [];
+  if (rows.length === 0) return [];
+
+  const ids = rows.map(row => row.blocked_id);
+  const { data: profiles, error: profilesError } = await supabase.from('profiles')
+    .select('id,username,display_name,avatar_url')
+    .in('id', ids);
+  if (profilesError) throw profilesError;
+  const profilesById = new Map(
+    ((profiles ?? []) as UserSearchResult[]).map(profile => [profile.id, profile] as const)
+  );
+  return rows.map(row => ({
+    blocked_id: row.blocked_id,
+    created_at: row.created_at,
+    profile: profilesById.get(row.blocked_id) ?? null,
+  }));
+}
+
+export async function reportVideo(
+  videoId: string,
+  reason: VideoReportReason,
+  details?: string,
+): Promise<string> {
+  if (!videoId) throw new Error('Choose a video to report.');
+  const cleanDetails = details?.trim() ?? '';
+  if (cleanDetails.length > 500) throw new Error('Report details must be 500 characters or fewer.');
+  const { data, error } = await supabase.rpc('report_video', {
+    p_video_id: videoId,
+    p_reason: reason,
+    p_details: cleanDetails || null,
+  });
+  if (error) throw error;
+  if (typeof data !== 'string' || !data) throw new Error('Your report could not be recorded.');
+  return data;
 }
 
 export async function searchUsers(query: string): Promise<UserSearchResult[]> {

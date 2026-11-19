@@ -16,7 +16,7 @@ cp .env.example .env
 npx expo start
 ~~~
 
-In Supabase SQL Editor, run migrations 0001 through 0013 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
+In Supabase SQL Editor, run migrations 0001 through 0014 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migration 0014. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
 
 ## Current implementation
 - Expo Router mobile shell with Discover, Chats, Snaps and Profile tabs
@@ -39,6 +39,7 @@ In Supabase SQL Editor, run migrations 0001 through 0013 in filename order. Befo
 - Active Snap story tray grouped by creator, with sequential photo/video playback, expiry-aware advancement and short-lived signed URLs
 - Per-viewer Snap receipts recorded once per story; owners can see the view count for their own Snaps
 - Device push registration, per-category notification preferences and push tap navigation
+- Video reporting and mutual creator blocking, with server-side feed/profile/Story filtering and a blocked-account management list
 
 ## Messaging behavior and security
 Read receipts are stored in message_reads rather than the legacy messages.read_at field, so group chats can record each reader separately. The authenticated RPC derives the reader from auth.uid(), checks conversation membership, and inserts receipts idempotently. RLS lets a user see their own receipts and lets a sender see receipts for their own messages. Apply migration 0004 before expecting Seen indicators to work.
@@ -64,7 +65,7 @@ Migration 0009 creates:
 PostgreSQL creates in-app notification rows for new direct/group messages, follows, video likes and video comments. An insert trigger adds eligible events to the private outbox unless that category is disabled. The Edge Function claims an outbox row atomically, sends Expo Push Service messages in batches, disables tokens reported as DeviceNotRegistered, and records Expo ticket acceptance/failure. An accepted Expo ticket is not proof of final device delivery; push receipt polling is not implemented yet. A webhook secret protects the Edge Function endpoint; the service-role key remains server-side.
 
 ### Push deployment (required; not completed by this repository commit)
-1. Run migrations 0001 through 0013 in order, following the Snap cleanup prerequisites below before applying 0012.
+1. Run migrations 0001 through 0014 in order, following the Snap cleanup prerequisites below before applying 0012.
 2. Link the Supabase project from mobile/ with the Supabase CLI and deploy supabase/functions/send-push-notification. Only this function has JWT verification disabled; it requires the x-proxy-webhook-secret header.
 3. Set the Edge Function secret PROXY_PUSH_WEBHOOK_SECRET to a long random value. Supabase supplies SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Edge Functions; do not copy either into the app.
 4. In Supabase Dashboard, create a Database Webhook for INSERT on public.push_outbox, targeting the deployed send-push-notification function URL. Add a custom header named x-proxy-webhook-secret with the same secret. Do not expose that secret in the mobile app or repository.
@@ -80,6 +81,23 @@ The feed calls the authenticated `get_personalized_video_feed` RPC (migration 00
 - Mobile workflow [run #190](https://github.com/kabeerabdulrahmanburodo-bit/Proxy/actions/runs/44282115167) passed dependency install, TypeScript typecheck and both Edge Function checks (including Snap cleanup tests).
 - PostgreSQL 16 workflow [run #2](https://github.com/kabeerabdulrahmanburodo-bit/Proxy/actions/runs/44282115015) applied migration 0013 in a clean test fixture and passed ranking, follower-only/private visibility, limit and execute-grant assertions.
 - No live Supabase project or physical device was used for this run; production migration/RLS/Storage and playback/upload checks remain pending. Lint and mobile unit-test scripts are not configured.
+
+## Video reporting and creator blocking
+
+Migration 0014 adds private video reports and viewer-scoped block controls:
+- The feed's video menu lets a viewer report spam, harassment, hate, nudity, violence, copyright infringement or another issue.
+- Reports are inserted through the authenticated \`report_video\` RPC. A viewer can create one report per video; repeated submissions are idempotent. The report table has no mobile-client read/write grants and is reserved for a trusted service-role moderation workflow.
+- Blocking is mutual for content visibility: both accounts' videos, profiles, comments, likes and active Snaps are hidden from one another. Existing follow edges in both directions are removed; new follow attempts are rejected while either block remains active.
+- Profile settings list the accounts the current user has blocked and allow them to be unblocked. Unblocking does not restore follows automatically.
+- Blocking does not delete existing conversations or prevent messages in already-existing chats. Those controls need a separate messaging policy milestone.
+- The \`videos\` Storage bucket remains public for current playback compatibility. Database/feed access is filtered, but a public object URL already known to a user remains fetchable; moving feed media to private signed delivery requires a separate migration and playback change.
+- This repository adds report capture, not a moderator dashboard or automated takedown pipeline. A trusted operator must review pending rows in \`video_reports\` and apply any moderation action.
+
+Apply migration \`0014_video_safety_controls.sql\` after \`0013_personalized_video_feed.sql\`. The migration grants only the report/block RPCs to authenticated users, keeps report rows service-role-only, and does not add any service credential to the mobile app.
+
+## Automated safety verification
+- The PostgreSQL 16 [Video safety SQL workflow](https://github.com/kabeerabdulrahmanburodo-bit/Proxy/actions/workflows/video-safety-sql.yml) applies migrations 0013 and 0014 in an isolated fixture and checks both block directions, feed/RLS filtering, follow prevention, report idempotency/privacy and RPC privileges.
+- Live Supabase deployment, real-account moderation testing and device UI testing remain separate production checks.
 
 ## Snap story viewing and receipts
 The Snaps tab loads only unexpired rows visible through the authenticated user's `snaps` RLS policy (their own stories and stories from followed creators). Stories are grouped by creator and ordered oldest-to-newest within each creator. The viewer advances through photos after five seconds, plays videos until the player reaches the end, and skips a story when its `expires_at` is reached. New object-path rows receive a five-minute signed URL from the private `snaps` bucket; signing is authorized by Storage RLS. Legacy rows that still contain signed URLs are accepted only when the URL belongs to this Supabase project and its signed `snaps` object endpoint, but the old token cannot be refreshed after it expires.
@@ -139,7 +157,7 @@ The cron request keeps the project URL and keys in Vault rather than in the stor
 ## Important production work still required
 1. Deploy and monitor the scheduled Snap cleanup job; the code and migration are committed, but the live Supabase function, Vault secrets and cron execution still require project-owner setup.
 2. Add native OS-managed background transfer; the current queue resumes in the foreground after app restarts but does not run while the OS suspends the app.
-3. Extend the feed ranking with skip signals, server-side pagination, moderation eligibility and stronger safety/diversity controls.
+3. Add a trusted moderation console and enforcement workflow for pending video reports; move public feed video objects to signed/private delivery before promising URL-level block enforcement.
 4. Implement WebRTC calling with a native WebRTC module, signaling, STUN/TURN credentials, call lifecycle, permissions, reconnect handling and abuse controls. Native WebRTC is not supported in Expo Go; use an Expo development build / EAS Build.
 5. Add broader automated integration tests, error reporting, rate limits, moderation/report flows, account deletion/export, privacy policy, terms and load/security testing.
 

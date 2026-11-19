@@ -22,6 +22,13 @@ export type ConversationPresence = {
   typing: boolean;
 };
 export type UserSearchResult = Pick<Profile, 'id' | 'username' | 'display_name' | 'avatar_url'>;
+export type VideoReportReason =
+  | 'spam' | 'harassment' | 'hate' | 'nudity' | 'violence' | 'copyright' | 'other';
+export type BlockedUser = {
+  blocked_id: string;
+  created_at: string;
+  profile: UserSearchResult | null;
+};
 export type ConversationSummary = {
   id: string;
   is_group: boolean;
