@@ -59,9 +59,11 @@ alter table public.videos enable row level security;
 alter table public.snaps enable row level security;
 alter table public.comments enable row level security;
 alter table public.video_likes enable row level security;
+alter table public.video_views enable row level security;
 
 grant select on public.profiles, public.videos, public.snaps,
   public.comments, public.video_likes to authenticated;
+grant insert on public.comments, public.video_likes, public.video_views to authenticated;
 grant select, insert on public.follows to authenticated;
 create policy "Profiles are viewable by signed-in users"
   on public.profiles for select to authenticated using (true);
@@ -82,6 +84,12 @@ create policy "Comments readable"
   on public.comments for select to authenticated using (true);
 create policy "Likes readable"
   on public.video_likes for select to authenticated using (true);
+create policy "Like as yourself"
+  on public.video_likes for insert to authenticated with check (auth.uid()=user_id);
+create policy "Comment as yourself"
+  on public.comments for insert to authenticated with check (auth.uid()=user_id);
+create policy "Record own views"
+  on public.video_views for insert to authenticated with check (auth.uid()=user_id);
 
 \ir ../migrations/0013_personalized_video_feed.sql
 \ir ../migrations/0014_video_safety_controls.sql
@@ -192,6 +200,37 @@ begin
   if row_count <> 0 then
     raise exception 'Likes on blocked videos must be hidden';
   end if;
+
+  -- RLS must also prevent new interactions and watch signals for hidden videos.
+  begin
+    insert into public.video_likes(video_id,user_id)
+    values ('10000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001');
+    raise exception 'Expected blocked-video like to be rejected';
+  exception when insufficient_privilege then
+    null;
+  end;
+  begin
+    insert into public.comments(id,video_id,user_id,body)
+    values ('30000000-0000-0000-0000-000000000003','10000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001','blocked interaction');
+    raise exception 'Expected blocked-video comment to be rejected';
+  exception when insufficient_privilege then
+    null;
+  end;
+  begin
+    insert into public.video_views(id,video_id,user_id,watch_seconds,completed,created_at)
+    values ('50000000-0000-0000-0000-000000000001','10000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001',5,false,now());
+    raise exception 'Expected blocked-video watch signal to be rejected';
+  exception when insufficient_privilege then
+    null;
+  end;
+
+  -- A visible public video still accepts normal engagement and watch signals.
+  insert into public.video_likes(video_id,user_id)
+  values ('10000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000001');
+  insert into public.comments(id,video_id,user_id,body)
+  values ('30000000-0000-0000-0000-000000000004','10000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000001','visible interaction');
+  insert into public.video_views(id,video_id,user_id,watch_seconds,completed,created_at)
+  values ('50000000-0000-0000-0000-000000000002','10000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000001',5,false,now());
 
   select count(*) into row_count from public.user_blocks;
   if row_count <> 1 then

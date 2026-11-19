@@ -311,6 +311,31 @@ create policy "Likes readable for visible videos"
     select 1 from public.videos v where v.id = video_likes.video_id
   ));
 
+-- A client cannot create engagement signals for a video it cannot currently view.
+drop policy if exists "Like as yourself" on public.video_likes;
+create policy "Like visible videos as yourself"
+  on public.video_likes for insert to authenticated
+  with check (
+    user_id = (select auth.uid())
+    and exists (select 1 from public.videos v where v.id = video_likes.video_id)
+  );
+
+drop policy if exists "Comment as yourself" on public.comments;
+create policy "Comment on visible videos as yourself"
+  on public.comments for insert to authenticated
+  with check (
+    user_id = (select auth.uid())
+    and exists (select 1 from public.videos v where v.id = comments.video_id)
+  );
+
+drop policy if exists "Record own views" on public.video_views;
+create policy "Record views for visible videos"
+  on public.video_views for insert to authenticated
+  with check (
+    user_id = (select auth.uid())
+    and exists (select 1 from public.videos v where v.id = video_views.video_id)
+  );
+
 -- Keep the personalized feed's existing contract while filtering both directions
 -- of a block relationship inside the SECURITY DEFINER query.
 create or replace function public.get_personalized_video_feed(p_limit integer default 20)
