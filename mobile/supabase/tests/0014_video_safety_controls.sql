@@ -112,6 +112,16 @@ insert into public.videos(id,user_id,caption,video_url,thumbnail_url,visibility,
   ('10000000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000001','own video','https://cdn.example/4.mp4',null,'public',now()),
   ('10000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000004','private target','https://cdn.example/5.mp4',null,'private',now());
 
+insert into public.videos(id,user_id,caption,video_url,thumbnail_url,visibility,created_at)
+select md5('proxy-report-limit-' || n::text)::uuid,
+       '00000000-0000-0000-0000-000000000004',
+       'rate limit fixture',
+       'https://cdn.example/rate-' || n::text || '.mp4',
+       null,
+       'public',
+       now() - interval '10 days'
+from generate_series(1, 21) as n;
+
 insert into public.comments values
   ('30000000-0000-0000-0000-000000000001','10000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000004','blocked comment'),
   ('30000000-0000-0000-0000-000000000002','10000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000004','visible comment');
@@ -134,6 +144,7 @@ do $$
 declare
   report_one uuid;
   report_two uuid;
+  report_index integer;
   feed_ids uuid[];
   row_count integer;
 begin
@@ -265,6 +276,25 @@ begin
   if report_one <> report_two then
     raise exception 'A repeated report must be idempotent per viewer/video';
   end if;
+
+  for report_index in 1..19 loop
+    perform public.report_video(
+      md5('proxy-report-limit-' || report_index::text)::uuid,
+      'spam',
+      null
+    );
+  end loop;
+
+  begin
+    perform public.report_video(
+      md5('proxy-report-limit-21')::uuid,
+      'spam',
+      null
+    );
+    raise exception 'Expected hourly report limit to be enforced';
+  exception when raise_exception then
+    if sqlerrm = 'Expected hourly report limit to be enforced' then raise; end if;
+  end;
 
   begin
     perform public.report_video('10000000-0000-0000-0000-000000000004','spam',null);

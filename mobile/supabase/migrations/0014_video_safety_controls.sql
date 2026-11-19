@@ -212,6 +212,10 @@ begin
     raise exception 'This video is unavailable for reporting';
   end if;
 
+  -- Serialize report submissions per viewer so concurrent requests cannot
+  -- exceed the hourly allowance.
+  perform pg_advisory_xact_lock(hashtext(requester_id::text), 0);
+
   -- Repeated submissions for the same video return the existing receipt without
   -- consuming the per-hour allowance.
   select r.id into report_id
