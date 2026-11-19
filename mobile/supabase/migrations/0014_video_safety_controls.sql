@@ -149,6 +149,8 @@ create index if not exists video_reports_status_created_idx
   on public.video_reports(status, created_at);
 create index if not exists video_reports_video_idx
   on public.video_reports(video_id);
+create index if not exists video_reports_reporter_recent_idx
+  on public.video_reports(reporter_id, created_at desc);
 
 alter table public.video_reports enable row level security;
 revoke all on table public.video_reports from public, anon, authenticated;
@@ -168,6 +170,7 @@ declare
   requester_id uuid := auth.uid();
   video_owner uuid;
   report_id uuid;
+  recent_report_count integer;
   clean_details text := nullif(btrim(p_details), '');
 begin
   if requester_id is null then
@@ -207,6 +210,23 @@ begin
   end if;
   if public.users_blocked_for_viewer(video_owner) then
     raise exception 'This video is unavailable for reporting';
+  end if;
+
+  -- Repeated submissions for the same video return the existing receipt without
+  -- consuming the per-hour allowance.
+  select r.id into report_id
+  from public.video_reports r
+  where r.reporter_id = requester_id and r.video_id = p_video_id;
+  if found then
+    return report_id;
+  end if;
+
+  select count(*)::integer into recent_report_count
+  from public.video_reports r
+  where r.reporter_id = requester_id
+    and r.created_at > now() - interval '1 hour';
+  if recent_report_count >= 20 then
+    raise exception 'Report limit reached; try again later';
   end if;
 
   insert into public.video_reports(reporter_id, video_id, reason, details)

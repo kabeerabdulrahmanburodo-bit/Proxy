@@ -62,6 +62,7 @@ alter table public.video_likes enable row level security;
 
 grant select on public.profiles, public.videos, public.snaps,
   public.comments, public.video_likes to authenticated;
+grant select, insert on public.follows to authenticated;
 create policy "Profiles are viewable by signed-in users"
   on public.profiles for select to authenticated using (true);
 create policy "Public videos and own videos readable"
