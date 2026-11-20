@@ -62,7 +62,8 @@ insert into public.videos(id,user_id,caption,video_url,thumbnail_url,visibility,
   ('10000000-0000-0000-0000-000000000010','00000000-0000-0000-0000-000000000001','owner private','00000000-0000-0000-0000-000000000001/own-private.mp4',null,'private',now()),
   ('10000000-0000-0000-0000-000000000011','00000000-0000-0000-0000-000000000004','legacy supabase url','https://project-ref.supabase.co/storage/v1/object/public/videos/00000000-0000-0000-0000-000000000004/legacy.mp4',null,'public',now()),
   ('10000000-0000-0000-0000-000000000012','00000000-0000-0000-0000-000000000004','external legacy url','https://cdn.example/legacy.mp4',null,'public',now()),
-  ('10000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000004','mismatched owner path','00000000-0000-0000-0000-000000000002/mismatch.mp4',null,'public',now());
+  ('10000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000004','mismatched owner path','00000000-0000-0000-0000-000000000002/mismatch.mp4',null,'public',now()),
+  ('10000000-0000-0000-0000-000000000016','00000000-0000-0000-0000-000000000004','external URL mimics Storage path','https://cdn.example/storage/v1/object/public/videos/00000000-0000-0000-0000-000000000004/spoof.mp4',null,'public',now());
 
 insert into storage.objects(bucket_id,name) values
   ('videos','00000000-0000-0000-0000-000000000004/public.mp4'),
@@ -99,6 +100,10 @@ begin
   if (select visibility from public.videos where id='10000000-0000-0000-0000-000000000013')
       <> 'private' then
     raise exception 'Owner-mismatched media path must be hidden';
+  end if;
+  if (select visibility from public.videos where id='10000000-0000-0000-0000-000000000016')
+      <> 'private' then
+    raise exception 'A non-Supabase host mimicking the public Storage path must remain private';
   end if;
 end;
 $$;

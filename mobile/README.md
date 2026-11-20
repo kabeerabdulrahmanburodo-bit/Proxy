@@ -158,7 +158,7 @@ The cron request keeps the project URL and keys in Vault rather than in the stor
 
 Migration `0015_private_video_delivery.sql` changes the `videos` bucket from public to private and removes the anonymous/public Storage read policy. New video rows store only the owner's Storage object path (for example `<user-uuid>/<file>`), never a public or signed URL. The database trigger rejects new or changed video references that do not use the row owner's folder.
 
-The migration converts existing same-project Supabase public video URLs to object paths. Legacy external URLs and paths whose first folder does not match the row owner are retained in PostgreSQL but changed to `visibility='private'`; the owner must re-upload those clips to restore feed distribution. This avoids silently serving media that cannot be protected by this project's Storage RLS.
+The migration converts existing Supabase `.supabase.co` public video URLs with owner-scoped paths to object paths. Legacy external URLs and paths whose first folder does not match the row owner are retained in PostgreSQL but changed to `visibility='private'`; the owner must re-upload those clips to restore feed distribution. This avoids silently serving media that cannot be protected by this project's Storage RLS.
 
 The Storage read policy allows an owner to inspect their own upload before its `videos` row is finalized, and otherwise requires a visible video row. Public videos are readable to signed-in users, follower-only videos to current followers, and both directions of an active block are denied. Anonymous reads are disabled. Upload and owner-delete policies remain user-folder scoped.
 

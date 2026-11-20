@@ -6,11 +6,11 @@
 update public.videos
 set video_url = regexp_replace(
   video_url,
-  '^https?://[^/]+/storage/v1/object/public/videos/',
+  '^https?://[A-Za-z0-9-]+\.supabase\.co/storage/v1/object/public/videos/',
   '',
   'i'
 )
-where video_url ~* '^https?://[^/]+/storage/v1/object/public/videos/[A-Za-z0-9._/-]+$';
+where video_url ~* '^https?://[A-Za-z0-9-]+\.supabase\.co/storage/v1/object/public/videos/[A-Za-z0-9._/-]+$';
 
 update public.videos
 set visibility = 'private'
