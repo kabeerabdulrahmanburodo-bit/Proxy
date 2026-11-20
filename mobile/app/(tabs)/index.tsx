@@ -2,18 +2,47 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, Text, View } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useRouter } from 'expo-router';
-import { blockUser, getVideoFeed, recordVideoView, reportVideo } from '../../lib/social';
+import { blockUser, getVideoFeed, getVideoPlaybackUrl, recordVideoView, reportVideo } from '../../lib/social';
 import type { VideoPost, VideoReportReason } from '../../lib/types';
 
 const purple = '#a78bfa', white = '#fafafa', muted = '#a1a1aa';
 const CARD_HEIGHT = Dimensions.get('window').height - 142;
 
 function VideoCard({ post, active, onOptions }: { post: VideoPost; active: boolean; onOptions: () => void }) {
-  const player = useVideoPlayer(post.video_url, instance => { instance.loop = true; });
+  const player = useVideoPlayer(null, instance => { instance.loop = true; });
+  const [playbackReady, setPlaybackReady] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+
   useEffect(() => {
-    if (active) player.play();
-    else player.pause();
-  }, [active, player]);
+    let cancelled = false;
+    if (!active) {
+      player.pause();
+      setPlaybackReady(false);
+      return () => { cancelled = true; };
+    }
+
+    setPlaybackReady(false);
+    setPlaybackError(null);
+    void (async () => {
+      try {
+        // Sign on activation rather than when the whole feed is fetched. Returning
+        // to a card therefore gets a fresh five-minute URL after a previous one expires.
+        const signedUrl = await getVideoPlaybackUrl(post);
+        if (cancelled) return;
+        player.replace(signedUrl);
+        player.play();
+        setPlaybackReady(true);
+      } catch (error) {
+        if (cancelled) return;
+        setPlaybackError(error instanceof Error ? error.message : 'This video could not be opened.');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      player.pause();
+    };
+  }, [active, player, post.id, post.user_id, post.video_url]);
 
   useEffect(() => {
     if (!active) return;
@@ -47,6 +76,16 @@ function VideoCard({ post, active, onOptions }: { post: VideoPost; active: boole
   return (
     <View style={{ height: CARD_HEIGHT, backgroundColor: '#18181b', borderRadius: 18, overflow: 'hidden', marginBottom: 12 }}>
       <VideoView player={player} style={{ width: '100%', height: '100%' }} contentFit="cover" nativeControls={false} />
+      {active && !playbackReady && !playbackError ? (
+        <View pointerEvents="none" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator color={purple} size="large" />
+        </View>
+      ) : null}
+      {active && playbackError ? (
+        <View pointerEvents="none" style={{ position: 'absolute', left: 24, right: 24, top: '42%', padding: 14, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.72)' }}>
+          <Text style={{ color: white, textAlign: 'center', fontSize: 12, lineHeight: 18 }}>{playbackError}</Text>
+        </View>
+      ) : null}
       <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 20, paddingTop: 70, backgroundColor: 'rgba(0,0,0,0.28)' }}>
         <Text style={{ color: white, fontWeight: '900', fontSize: 16 }}>@{post.profiles?.username ?? 'creator'}</Text>
         {!!post.caption && <Text style={{ color: white, marginTop: 7, lineHeight: 21 }}>{post.caption}</Text>}

@@ -306,7 +306,7 @@ async function uploadWithTus(
       bucketName: job.bucket,
       objectName: job.objectPath,
       contentType: job.contentType,
-      cacheControl: '3600',
+      cacheControl: job.purpose === 'video-post' ? '300' : '3600',
     },
     uploadDataDuringCreation: false,
     storeFingerprintForResuming: true,
@@ -390,11 +390,12 @@ async function uploadWithTus(
 
 async function finalizeUpload(job: MediaUploadJob): Promise<VideoPost | ChatMessage | Snap> {
   if (job.purpose === 'video-post') {
-    const { data: publicData } = supabase.storage.from('videos').getPublicUrl(job.objectPath);
+    // Store the owner-scoped Storage object path, never a public or signed URL.
+    // The feed obtains a short-lived signed URL only when a card becomes active.
     const existing = await supabase.from('videos')
       .select('id,user_id,caption,video_url,thumbnail_url,created_at')
       .eq('user_id', job.ownerId)
-      .eq('video_url', publicData.publicUrl)
+      .eq('video_url', job.objectPath)
       .maybeSingle();
     if (existing.error) throw existing.error;
     if (existing.data) return existing.data as VideoPost;
@@ -402,7 +403,7 @@ async function finalizeUpload(job: MediaUploadJob): Promise<VideoPost | ChatMess
     const { data, error } = await supabase.from('videos').insert({
       user_id: job.ownerId,
       caption: job.caption || null,
-      video_url: publicData.publicUrl,
+      video_url: job.objectPath,
       visibility: 'public',
     }).select('id,user_id,caption,video_url,thumbnail_url,created_at').single();
     if (error) throw error;

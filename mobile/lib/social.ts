@@ -7,6 +7,53 @@ import type {
 
 export const MESSAGE_PAGE_SIZE = 30;
 
+const VIDEO_SIGNED_URL_TTL_SECONDS = 5 * 60;
+
+function getVideoObjectPath(videoUrl: string, ownerId: string): string | null {
+  let path = videoUrl.trim();
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    const configuredUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    if (!configuredUrl) return null;
+    try {
+      const projectUrl = new URL(configuredUrl);
+      const legacyUrl = new URL(path);
+      const publicVideosPrefix = '/storage/v1/object/public/videos/';
+      if (
+        legacyUrl.origin !== projectUrl.origin ||
+        legacyUrl.search ||
+        legacyUrl.hash ||
+        !legacyUrl.pathname.startsWith(publicVideosPrefix)
+      ) return null;
+      path = decodeURIComponent(legacyUrl.pathname.slice(publicVideosPrefix.length));
+    } catch {
+      return null;
+    }
+  }
+
+  const parts = path.split('/');
+  if (
+    parts.length !== 2 ||
+    parts[0] !== ownerId ||
+    !/^[A-Za-z0-9._-]{1,120}$/.test(parts[1])
+  ) return null;
+  return path;
+}
+
+export async function getVideoPlaybackUrl(
+  post: Pick<VideoPost, 'video_url' | 'user_id'>,
+): Promise<string> {
+  const objectPath = getVideoObjectPath(post.video_url, post.user_id);
+  if (!objectPath) {
+    throw new Error('This video does not have a valid owner-scoped Storage path. Ask the creator to re-upload it for secure playback.');
+  }
+  const { data, error } = await supabase.storage
+    .from('videos')
+    .createSignedUrl(objectPath, VIDEO_SIGNED_URL_TTL_SECONDS);
+  if (error) throw error;
+  if (!data?.signedUrl) throw new Error('Could not create a secure video playback URL.');
+  return data.signedUrl;
+}
+
 export async function getVideoFeed(limit = 20): Promise<VideoPost[]> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sign in to view your feed.');
