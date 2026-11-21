@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as tus from 'tus-js-client';
 import { supabase } from './supabase';
+import { shouldDeleteOrphanedStagedFile, shouldRequireStagedFile } from './upload-queue-policy';
 import type { ChatMessage, Snap, VideoPost } from './types';
 
 export type MediaUploadPurpose = 'video-post' | 'chat-attachment' | 'snap';
@@ -96,6 +97,10 @@ async function readTusEntries(): Promise<TusUrlEntry[]> {
   }
 }
 
+async function writeTusEntries(entries: TusUrlEntry[]) {
+  await AsyncStorage.setItem(TUS_URLS_KEY, JSON.stringify(entries));
+}
+
 // React Native has no Web Storage API, so tus-js-client receives an AsyncStorage-backed
 // URL store. It contains resumable session URLs only; access tokens are never persisted here.
 const tusUrlStorage = {
@@ -118,18 +123,16 @@ const tusUrlStorage = {
   },
   async removeUpload(urlStorageKey: string) {
     const entries = await readTusEntries();
-    await AsyncStorage.setItem(TUS_URLS_KEY, JSON.stringify(
-      entries.filter(entry => entry.urlStorageKey !== urlStorageKey)
-    ));
+    await writeTusEntries(entries.filter(entry => entry.urlStorageKey !== urlStorageKey));
   },
   async addUpload(fingerprint: string, upload: Omit<TusUrlEntry, 'urlStorageKey'> | TusUrlEntry) {
     const urlStorageKey = 'tus::' + fingerprint + '::' + makeId();
     const entry = { ...upload, urlStorageKey } as TusUrlEntry;
     const entries = await readTusEntries();
-    await AsyncStorage.setItem(TUS_URLS_KEY, JSON.stringify([
+    await writeTusEntries([
       ...entries.filter(item => item.urlStorageKey !== urlStorageKey),
       entry,
-    ]));
+    ]);
     return urlStorageKey;
   },
 };
@@ -137,6 +140,29 @@ const tusUrlStorage = {
 async function clearTusEntries(jobId: string) {
   const entries = await tusUrlStorage.findUploadsByFingerprint('proxy-' + jobId);
   await Promise.all(entries.map(entry => tusUrlStorage.removeUpload(entry.urlStorageKey)));
+}
+
+async function cleanupOrphanedStagedFiles(jobs: MediaUploadJob[]) {
+  try {
+    const directory = new Directory(Paths.document, UPLOAD_DIRECTORY);
+    if (!directory.exists) return;
+    const referencedUris = new Set(jobs.map(job => job.stagedUri));
+    const now = Date.now();
+
+    for (const entry of directory.list()) {
+      if (!(entry instanceof File)) continue;
+      const modifiedAt = entry.modificationTime ?? entry.creationTime;
+      if (!shouldDeleteOrphanedStagedFile(entry.uri, referencedUris, modifiedAt, now)) continue;
+      try {
+        entry.delete();
+      } catch (error) {
+        console.warn('Could not remove an abandoned staged upload file:', error);
+      }
+    }
+  } catch (error) {
+    // Maintenance must never make a valid pending upload unavailable.
+    console.warn('Could not scan the staged upload directory:', error);
+  }
 }
 
 export async function createMediaUploadJob(input: CreateMediaUploadInput): Promise<MediaUploadJob> {
@@ -230,10 +256,12 @@ export async function getPendingMediaUploads(): Promise<MediaUploadJob[]> {
       ? { ...job, status: 'paused' as const }
       : job)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  await writeJobs(jobs.map(job => {
+  const normalized = jobs.map(job => {
     const refreshed = visible.find(item => item.id === job.id);
     return refreshed ?? job;
-  }));
+  });
+  await writeJobs(normalized);
+  await cleanupOrphanedStagedFiles(normalized);
   return visible;
 }
 
@@ -390,8 +418,6 @@ async function uploadWithTus(
 
 async function finalizeUpload(job: MediaUploadJob): Promise<VideoPost | ChatMessage | Snap> {
   if (job.purpose === 'video-post') {
-    // Store the owner-scoped Storage object path, never a public or signed URL.
-    // The feed obtains a short-lived signed URL only when a card becomes active.
     const existing = await supabase.from('videos')
       .select('id,user_id,caption,video_url,thumbnail_url,created_at')
       .eq('user_id', job.ownerId)
@@ -455,21 +481,89 @@ async function completeJob(job: MediaUploadJob) {
   } catch (error) {
     console.warn('The completed TUS session could not be cleared from local storage:', error);
   }
+
+  let queueEntryRemoved = false;
   try {
     const jobs = await readJobs();
     await writeJobs(jobs.filter(item => item.id !== job.id));
+    queueEntryRemoved = true;
   } catch (error) {
-    // Keep the job if local queue cleanup fails. A retry detects the existing Storage
-    // object and database row, then safely repeats only the local cleanup.
+    // Keep the staged copy while the queue entry remains. This lets a retry recover
+    // the already-uploaded object and finish local cleanup without re-uploading.
     console.warn('The completed upload could not be removed from the local queue:', error);
   }
+
+  if (queueEntryRemoved) {
+    try {
+      const staged = new File(job.stagedUri);
+      if (staged.exists) staged.delete();
+    } catch (error) {
+      console.warn('Uploaded media is safe, but its local staged copy could not be removed:', error);
+    }
+  }
+  return result;
+}
+
+async function hasFinalizedRecord(job: MediaUploadJob): Promise<boolean> {
+  if (job.purpose === 'video-post') {
+    const { data, error } = await supabase.from('videos').select('id')
+      .eq('user_id', job.ownerId).eq('video_url', job.objectPath).maybeSingle();
+    if (error) throw error;
+    return Boolean(data);
+  }
+  if (job.purpose === 'snap') {
+    const { data, error } = await supabase.from('snaps').select('id')
+      .eq('user_id', job.ownerId).eq('media_url', job.objectPath).maybeSingle();
+    if (error) throw error;
+    return Boolean(data);
+  }
+  if (!job.conversationId) throw new Error('This chat attachment is missing its conversation reference.');
+  const { data, error } = await supabase.from('messages').select('id')
+    .eq('conversation_id', job.conversationId)
+    .eq('sender_id', job.ownerId)
+    .eq('media_url', job.objectPath)
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
+}
+
+export async function discardMediaUpload(jobId: string): Promise<void> {
+  if (activeJobs.has(jobId)) throw new Error('Wait for this upload to pause before discarding it.');
+  await getPendingMediaUploads();
+  const jobs = await readJobs();
+  const job = jobs.find(item => item.id === jobId);
+  if (!job) return;
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user || user.id !== job.ownerId) {
+    throw new Error('Sign in with the account that started this upload.');
+  }
+  if (job.status === 'uploading' || activeJobs.has(jobId)) {
+    throw new Error('This upload is still active. Wait until it is paused before discarding it.');
+  }
+
+  // Never remove media that has already been linked to a published video, Snap or message.
+  const finalized = await hasFinalizedRecord(job);
+  if (!finalized && await getObjectExists(job)) {
+    const { error } = await supabase.storage.from(job.bucket).remove([job.objectPath]);
+    if (error) throw error;
+  }
+
+  try {
+    await clearTusEntries(job.id);
+  } catch (error) {
+    // The server expires abandoned TUS sessions; local queue cleanup can still proceed.
+    console.warn('Could not clear the discarded TUS session reference:', error);
+  }
+
+  const currentJobs = await readJobs();
+  await writeJobs(currentJobs.filter(item => item.id !== job.id));
   try {
     const staged = new File(job.stagedUri);
     if (staged.exists) staged.delete();
   } catch (error) {
-    console.warn('Uploaded media is safe, but its local staged copy could not be removed:', error);
+    console.warn('The upload was discarded, but its staged file could not be removed:', error);
   }
-  return result;
 }
 
 export async function resumeMediaUpload(
@@ -487,14 +581,17 @@ export async function resumeMediaUpload(
     if (!user || user.id !== job.ownerId) throw new Error('Sign in with the account that started this upload.');
 
     await updateJob(job.id, { status: 'uploading', lastError: undefined });
-    const stagedFile = new File(job.stagedUri);
-    if (!stagedFile.exists || stagedFile.size !== job.fileSize) {
-      throw new Error('The saved upload file is missing or has changed. Choose the original media again.');
-    }
-
-    if (!(await getObjectExists(job))) {
+    const objectExists = await getObjectExists(job);
+    if (shouldRequireStagedFile(objectExists)) {
+      const stagedFile = new File(job.stagedUri);
+      if (!stagedFile.exists || stagedFile.size !== job.fileSize) {
+        throw new Error('The saved upload file is missing or has changed. Choose the original media again.');
+      }
       await uploadWithTus(job, stagedFile, onProgress);
     } else {
+      // A previous attempt may have finished Storage upload and database finalization
+      // before local queue cleanup. Recover from the remote object even if staging was
+      // already removed; finalizeUpload is idempotent for all three media purposes.
       onProgress?.(1);
       await updateJob(job.id, { progress: 1 });
     }

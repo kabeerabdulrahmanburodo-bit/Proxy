@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, Pressable, ScrollView, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { getPendingMediaUploads, resumeMediaUpload } from '../lib/uploads';
+import { discardMediaUpload, getPendingMediaUploads, resumeMediaUpload } from '../lib/uploads';
 import type { MediaUploadJob } from '../lib/uploads';
 
 const purple = '#a78bfa';
@@ -18,6 +18,7 @@ export default function PendingUploadsScreen() {
   const [jobs, setJobs] = useState<MediaUploadJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [discardingId, setDiscardingId] = useState<string | null>(null);
   const [progressById, setProgressById] = useState<Record<string, number>>({});
 
   const refresh = useCallback(async () => {
@@ -39,7 +40,7 @@ export default function PendingUploadsScreen() {
   }, [refresh]);
 
   async function resume(job: MediaUploadJob) {
-    if (activeId) return;
+    if (activeId || discardingId) return;
     setActiveId(job.id);
     setProgressById(current => ({ ...current, [job.id]: job.progress }));
     try {
@@ -62,6 +63,37 @@ export default function PendingUploadsScreen() {
     }
   }
 
+  function confirmDiscard(job: MediaUploadJob) {
+    const kind = job.purpose === 'video-post'
+      ? 'video post'
+      : job.purpose === 'snap' ? 'Snap' : 'chat attachment';
+    Alert.alert(
+      'Discard this upload?',
+      'The staged copy and any unfinished Storage object will be removed. Already-published or sent media will be kept.',
+      [
+        { text: 'Keep upload', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setDiscardingId(job.id);
+              try {
+                await discardMediaUpload(job.id);
+                Alert.alert('Upload discarded', 'The pending ' + kind + ' was removed from this device.');
+                await refresh();
+              } catch (error) {
+                Alert.alert('Could not discard upload', error instanceof Error ? error.message : 'The upload was kept so it can be recovered.');
+              } finally {
+                setDiscardingId(null);
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }
+
   return (
     <View style={{ flex: 1, backgroundColor: '#09090b', paddingTop: 56 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 20 }}>
@@ -70,7 +102,7 @@ export default function PendingUploadsScreen() {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={{ color: white, fontSize: 21, fontWeight: '900' }}>Pending uploads</Text>
-          <Text style={{ color: muted, fontSize: 11, marginTop: 3 }}>Resume transfers saved on this device</Text>
+          <Text style={{ color: muted, fontSize: 11, marginTop: 3 }}>Resume or safely discard transfers saved on this device</Text>
         </View>
       </View>
 
@@ -84,6 +116,7 @@ export default function PendingUploadsScreen() {
           ) : jobs.map(job => {
             const progress = progressById[job.id] ?? job.progress;
             const busy = activeId === job.id || job.status === 'uploading';
+            const discarding = discardingId === job.id;
             return (
               <View key={job.id} style={{ backgroundColor: '#18181b', borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#303036' }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -97,23 +130,32 @@ export default function PendingUploadsScreen() {
                   <View style={{ width: (Math.round(progress * 100) + '%') as any, height: 6, backgroundColor: purple }} />
                 </View>
                 <Text style={{ color: muted, fontSize: 10, marginTop: 7 }}>
-                  {busy ? 'UPLOADING ' + Math.round(progress * 100) + '%' : job.status.toUpperCase() + ' · ' + Math.round(progress * 100) + '%'}
+                  {busy ? 'UPLOADING ' + Math.round(progress * 100) + '%' : discarding ? 'DISCARDING…' : job.status.toUpperCase() + ' · ' + Math.round(progress * 100) + '%'}
                 </Text>
                 {job.lastError && !busy ? <Text style={{ color: '#fda4af', fontSize: 11, lineHeight: 17, marginTop: 8 }}>{job.lastError}</Text> : null}
-                <Pressable
-                  onPress={() => void resume(job)}
-                  disabled={Boolean(activeId)}
-                  style={{ backgroundColor: busy ? '#4c3d6d' : purple, padding: 13, borderRadius: 11, alignItems: 'center', marginTop: 14 }}
-                >
-                  {busy
-                    ? <ActivityIndicator color="#181024" />
-                    : <Text style={{ color: '#181024', fontSize: 11, fontWeight: '900' }}>RESUME UPLOAD</Text>}
-                </Pressable>
+                <View style={{ flexDirection: 'row', gap: 9, marginTop: 14 }}>
+                  <Pressable
+                    onPress={() => void resume(job)}
+                    disabled={Boolean(activeId) || Boolean(discardingId) || busy}
+                    style={{ flex: 1, backgroundColor: busy ? '#4c3d6d' : purple, padding: 13, borderRadius: 11, alignItems: 'center', opacity: activeId && activeId !== job.id ? 0.55 : 1 }}
+                  >
+                    {busy && activeId === job.id
+                      ? <ActivityIndicator color="#181024" />
+                      : <Text style={{ color: '#181024', fontSize: 11, fontWeight: '900' }}>RESUME</Text>}
+                  </Pressable>
+                  <Pressable
+                    onPress={() => confirmDiscard(job)}
+                    disabled={Boolean(activeId) || Boolean(discardingId) || busy}
+                    style={{ paddingHorizontal: 15, paddingVertical: 13, borderRadius: 11, borderWidth: 1, borderColor: '#7f1d1d', justifyContent: 'center', opacity: busy || discardingId ? 0.45 : 1 }}
+                  >
+                    <Text style={{ color: '#fca5a5', fontSize: 11, fontWeight: '900' }}>{discarding ? 'WAIT…' : 'DISCARD'}</Text>
+                  </Pressable>
+                </View>
               </View>
             );
           })}
           <Text style={{ color: muted, fontSize: 10, lineHeight: 16, marginTop: 8 }}>
-            Uploads pause when PROXY is backgrounded and continue when the app returns. If the app is closed or the phone restarts, reopen this screen and resume. Native background transfer is not enabled in this Expo build.
+            Transfers use resumable 6 MiB chunks. They pause when the app is backgrounded and resume in the foreground. Unreferenced staged files older than one hour are cleaned automatically. Native OS-managed background transfer is not enabled in this Expo build.
           </Text>
         </ScrollView>
       )}

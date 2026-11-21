@@ -43,3 +43,6 @@ jobs:
       - name: Test Snap cleanup path validation
         working-directory: mobile
         run: deno test supabase/functions/cleanup-expired-snaps/index.test.ts
+      - name: Test upload queue cleanup policy
+        working-directory: mobile
+        run: deno test supabase/tests/upload-queue-policy.test.ts
