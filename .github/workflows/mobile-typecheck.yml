@@ -45,4 +45,4 @@ jobs:
         run: deno test supabase/functions/cleanup-expired-snaps/index.test.ts
       - name: Test upload queue cleanup policy
         working-directory: mobile
-        run: deno test supabase/tests/upload-queue-policy.test.ts
+        run: deno test supabase/functions/cleanup-expired-snaps/upload-queue-policy.test.ts

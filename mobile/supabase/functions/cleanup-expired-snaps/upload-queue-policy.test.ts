@@ -2,7 +2,7 @@ import {
   ORPHAN_STAGED_FILE_GRACE_MS,
   shouldDeleteOrphanedStagedFile,
   shouldRequireStagedFile,
-} from "../../lib/upload-queue-policy.ts";
+} from "../../../lib/upload-queue-policy.ts";
 
 Deno.test("queued staged files are never treated as orphans", () => {
   const now = 10 * ORPHAN_STAGED_FILE_GRACE_MS;
@@ -12,9 +12,7 @@ Deno.test("queued staged files are never treated as orphans", () => {
     referenced,
     now - 10 * ORPHAN_STAGED_FILE_GRACE_MS,
     now,
-  )) {
-    throw new Error("A file referenced by a pending job must be preserved");
-  }
+  )) throw new Error("A file referenced by a pending job must be preserved");
 });
 
 Deno.test("recent orphan files receive a grace period", () => {
@@ -24,9 +22,7 @@ Deno.test("recent orphan files receive a grace period", () => {
     new Set(),
     now - ORPHAN_STAGED_FILE_GRACE_MS / 2,
     now,
-  )) {
-    throw new Error("A recently created file must not be removed");
-  }
+  )) throw new Error("A recently created file must not be removed");
 });
 
 Deno.test("old unreferenced staged files can be cleaned", () => {
@@ -36,9 +32,7 @@ Deno.test("old unreferenced staged files can be cleaned", () => {
     new Set(),
     now - ORPHAN_STAGED_FILE_GRACE_MS - 1,
     now,
-  )) {
-    throw new Error("An old unreferenced file should be eligible for cleanup");
-  }
+  )) throw new Error("An old unreferenced file should be eligible for cleanup");
 });
 
 Deno.test("unknown or future file timestamps fail closed", () => {
