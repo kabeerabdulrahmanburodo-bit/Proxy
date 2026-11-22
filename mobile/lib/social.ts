@@ -420,11 +420,23 @@ export async function leaveGroupConversation(conversationId: string): Promise<vo
   await removeGroupConversationMember(conversationId, user.id);
 }
 
+export async function canSendConversationMessage(conversationId: string): Promise<boolean> {
+  if (!conversationId) return false;
+  const { data, error } = await supabase.rpc('can_send_conversation_message', {
+    p_conversation_id: conversationId,
+  });
+  if (error) throw error;
+  return data === true;
+}
+
 export async function sendMessage(conversationId: string, body: string) {
   const text = body.trim();
   if (!text) throw new Error('Message cannot be empty.');
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sign in first.');
+  if (!(await canSendConversationMessage(conversationId))) {
+    throw new Error('Direct messaging is unavailable while a block is active.');
+  }
   const { data, error } = await supabase.from('messages')
     .insert({ conversation_id: conversationId, sender_id: user.id, body: text })
     .select().single();
