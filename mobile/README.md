@@ -16,7 +16,7 @@ cp .env.example .env
 npx expo start
 ~~~
 
-In Supabase SQL Editor, run migrations 0001 through 0016 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migration 0014. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
+In Supabase SQL Editor, run migrations 0001 through 0016 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migrations 0014, 0015 and 0016 in filename order. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
 
 ## Current implementation
 - Expo Router mobile shell with Discover, Chats, Snaps and Profile tabs
@@ -65,7 +65,7 @@ Migration 0009 creates:
 PostgreSQL creates in-app notification rows for new direct/group messages, follows, video likes and video comments. An insert trigger adds eligible events to the private outbox unless that category is disabled. The Edge Function claims an outbox row atomically, sends Expo Push Service messages in batches, disables tokens reported as DeviceNotRegistered, and records Expo ticket acceptance/failure. An accepted Expo ticket is not proof of final device delivery; push receipt polling is not implemented yet. A webhook secret protects the Edge Function endpoint; the service-role key remains server-side.
 
 ### Push deployment (required; not completed by this repository commit)
-1. Run migrations 0001 through 0015 in order, following the Snap cleanup prerequisites below before applying 0012.
+1. Run migrations 0001 through 0016 in order, following the Snap cleanup prerequisites below before applying 0012.
 2. Link the Supabase project from mobile/ with the Supabase CLI and deploy supabase/functions/send-push-notification. Only this function has JWT verification disabled; it requires the x-proxy-webhook-secret header.
 3. Set the Edge Function secret PROXY_PUSH_WEBHOOK_SECRET to a long random value. Supabase supplies SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Edge Functions; do not copy either into the app.
 4. In Supabase Dashboard, create a Database Webhook for INSERT on public.push_outbox, targeting the deployed send-push-notification function URL. Add a custom header named x-proxy-webhook-secret with the same secret. Do not expose that secret in the mobile app or repository.
@@ -89,7 +89,7 @@ Migration 0014 adds private video reports and viewer-scoped block controls:
 - Reports are inserted through the authenticated `report_video` RPC. A viewer can create one report per video; repeated submissions are idempotent, and new reports are capped at 20 per viewer per hour. The report table has no mobile-client read/write grants and is reserved for a trusted service-role moderation workflow.
 - Blocking is mutual for content visibility: both accounts' videos, profiles, comments, likes and active Snaps are hidden from one another. RLS also rejects new likes, comments and watch-time rows for videos the viewer cannot access. Existing follow edges in both directions are removed; new follow attempts are rejected while either block remains active.
 - Profile settings list the accounts the current user has blocked and allow them to be unblocked. Unblocking does not restore follows automatically.
-- Blocking does not delete existing conversations or prevent messages in already-existing chats. Those controls need a separate messaging policy milestone.
+- Blocking does not delete existing conversations. Migration 0016 disables new direct messages, message edits and chat-attachment uploads in both directions while a block is active. Existing history and previously shared attachments remain readable; group chats remain available.
 - Migration 0015 makes the `videos` Storage bucket private. Feed cards obtain a five-minute signed URL only when they become active; Storage RLS permits the owner and eligible public/follower viewers, and rejects both directions of a block. Previously issued signed URLs remain bearer links until their five-minute expiry.
 - This repository adds report capture, not a moderator dashboard or automated takedown pipeline. A trusted operator must review pending rows in `video_reports` and apply any moderation action.
 
