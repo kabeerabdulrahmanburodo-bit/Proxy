@@ -7,7 +7,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
-  getConversationDetails, getConversationMessages, getMessageReadReceipts, markConversationMessagesRead,
+  canSendConversationMessage, getConversationDetails, getConversationMessages, getMessageReadReceipts, markConversationMessagesRead,
   MESSAGE_PAGE_SIZE, sendMessage, subscribeToConversationPresence, subscribeToMessages,
   subscribeToMessageReadReceipts, trackConversationOnline, trackConversationTyping,
 } from '../../lib/social';
@@ -64,6 +64,7 @@ export default function ConversationScreen() {
   const [userId, setUserId] = useState('');
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
+  const [messagingStatus, setMessagingStatus] = useState<'checking' | 'allowed' | 'blocked' | 'unavailable'>('checking');
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [sending, setSending] = useState(false);
@@ -86,6 +87,7 @@ export default function ConversationScreen() {
     let presenceChannel: ReturnType<typeof supabase.channel> | null = null;
     setPresence([]);
     setPresenceReady(false);
+    setMessagingStatus('checking');
 
     const messageChannel = subscribeToMessages(id, incoming => {
       void resolveChatMessageAttachment(incoming).then(resolved => {
@@ -158,6 +160,16 @@ export default function ConversationScreen() {
         setHasMoreMessages(rawHistory.length === MESSAGE_PAGE_SIZE);
         scrollToBottomRef.current = true;
 
+        try {
+          const allowed = await canSendConversationMessage(id);
+          if (active) setMessagingStatus(allowed ? 'allowed' : 'blocked');
+        } catch (permissionError) {
+          if (active) {
+            setMessagingStatus('unavailable');
+            console.warn('Could not verify direct messaging access:', permissionError);
+          }
+        }
+
         if (currentUserId) {
           presenceChannel = subscribeToConversationPresence(id, currentUserId, users => {
             if (active) {
@@ -213,6 +225,7 @@ export default function ConversationScreen() {
   }
 
   function updateDraft(value: string) {
+    if (messagingStatus !== 'allowed') return;
     setDraft(value);
     const channel = presenceChannelRef.current;
     const currentUserId = userIdRef.current;
@@ -264,11 +277,26 @@ export default function ConversationScreen() {
     }
   }
 
+  async function refreshMessagingStatus() {
+    if (!id) return;
+    setMessagingStatus('checking');
+    try {
+      const allowed = await canSendConversationMessage(id);
+      setMessagingStatus(allowed ? 'allowed' : 'blocked');
+    } catch (error) {
+      setMessagingStatus('unavailable');
+      console.warn('Could not verify direct messaging access:', error);
+    }
+  }
+
   async function submit() {
-    if (!id || !draft.trim() || sending) return;
+    if (!id || !draft.trim() || sending || messagingStatus !== 'allowed') return;
     stopTyping();
     setSending(true);
     try {
+      const allowed = await canSendConversationMessage(id);
+      setMessagingStatus(allowed ? 'allowed' : 'blocked');
+      if (!allowed) return;
       const created = await sendMessage(id, draft);
       ownMessageIdsRef.current.add(created.id);
       scrollToBottomRef.current = true;
@@ -282,7 +310,16 @@ export default function ConversationScreen() {
   }
 
   async function pickAttachment() {
-    if (!id || sending) return;
+    if (!id || sending || messagingStatus !== 'allowed') return;
+    try {
+      const allowed = await canSendConversationMessage(id);
+      setMessagingStatus(allowed ? 'allowed' : 'blocked');
+      if (!allowed) return;
+    } catch (error) {
+      setMessagingStatus('unavailable');
+      Alert.alert('Messaging access', error instanceof Error ? error.message : 'Could not verify messaging access.');
+      return;
+    }
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
       Alert.alert('Photo access', 'Allow photo library access to share an image or video.');
@@ -426,6 +463,22 @@ export default function ConversationScreen() {
       />
     }
 
+    {details && messagingStatus !== 'allowed' ? (
+      <View style={{ marginHorizontal: 13, marginTop: 10, padding: 12, borderRadius: 12, backgroundColor: '#27212f', borderWidth: 1, borderColor: '#51416d' }}>
+        <Text style={{ color: '#e4d9fa', fontSize: 12, lineHeight: 18 }}>
+          {messagingStatus === 'blocked'
+            ? 'Direct messaging is unavailable because one participant has blocked the other. Existing conversation history remains visible.'
+            : messagingStatus === 'checking'
+              ? 'Checking messaging access…'
+              : 'Messaging access could not be verified. Sending is disabled until access can be checked again.'}
+        </Text>
+        {messagingStatus !== 'checking' ? (
+          <Pressable onPress={() => void refreshMessagingStatus()} style={{ alignSelf: 'flex-start', paddingTop: 8 }}>
+            <Text style={{ color: purple, fontSize: 10, fontWeight: '900' }}>CHECK AGAIN</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    ) : null}
     {attachmentProgress !== null ? (
       <View style={{ paddingHorizontal: 16, paddingTop: 9 }}>
         <View style={{ height: 5, borderRadius: 3, backgroundColor: '#27272a', overflow: 'hidden' }}>
@@ -437,7 +490,7 @@ export default function ConversationScreen() {
     <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 9, padding: 13, paddingBottom: 18, borderTopWidth: 1, borderTopColor: '#27272a' }}>
       <Pressable
         onPress={() => void pickAttachment()}
-        disabled={sending || loading}
+        disabled={sending || loading || messagingStatus !== 'allowed'}
         style={{ width: 42, height: 42, borderRadius: 15, backgroundColor: '#302844', alignItems: 'center', justifyContent: 'center' }}
       >
         <Text style={{ color: purple, fontSize: 24, fontWeight: '700' }}>＋</Text>
@@ -449,10 +502,10 @@ export default function ConversationScreen() {
         placeholderTextColor="#71717a"
         multiline
         maxLength={5000}
-        editable={!sending}
+        editable={!sending && messagingStatus === 'allowed'}
         style={{ flex: 1, color: white, backgroundColor: '#18181b', borderRadius: 18, paddingHorizontal: 15, paddingVertical: 11, maxHeight: 120 }}
       />
-      <Pressable onPress={() => void submit()} disabled={sending || !draft.trim()} style={{ backgroundColor: sending || !draft.trim() ? '#4c3d6d' : purple, paddingHorizontal: 18, paddingVertical: 13, borderRadius: 16 }}>
+      <Pressable onPress={() => void submit()} disabled={sending || messagingStatus !== 'allowed' || !draft.trim()} style={{ backgroundColor: sending || !draft.trim() ? '#4c3d6d' : purple, paddingHorizontal: 18, paddingVertical: 13, borderRadius: 16 }}>
         {sending ? <ActivityIndicator color="#181024" /> : <Text style={{ color: '#181024', fontWeight: '900' }}>SEND</Text>}
       </Pressable>
     </View>
