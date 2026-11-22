@@ -16,7 +16,7 @@ cp .env.example .env
 npx expo start
 ~~~
 
-In Supabase SQL Editor, run migrations 0001 through 0014 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migration 0014. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
+In Supabase SQL Editor, run migrations 0001 through 0016 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migration 0014. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
 
 ## Current implementation
 - Expo Router mobile shell with Discover, Chats, Snaps and Profile tabs
@@ -163,6 +163,16 @@ The migration converts existing Supabase `.supabase.co` public video URLs with o
 The Storage read policy allows an owner to inspect their own upload before its `videos` row is finalized, and otherwise requires a visible video row. Public videos are readable to signed-in users, follower-only videos to current followers, and both directions of an active block are denied. Anonymous reads are disabled. Upload and owner-delete policies remain user-folder scoped.
 
 The feed signs a video only when its card becomes active, using a five-minute expiry. Returning to a card requests a fresh URL. A signed URL already issued is a bearer link and cannot be revoked immediately; it remains usable until expiry. Old public CDN cache entries may persist until their cache lifetime expires. No public bucket URL is returned by the feed RPC.
+
+## Block-aware direct messaging (migration 0016)
+
+Blocking now disables new direct messages in both directions, including when the direct conversation already existed before the block. The server checks the relationship when a direct conversation is created/reopened and through the message insert/update RLS policies, so bypassing the mobile UI does not bypass the restriction.
+
+Chat-attachment uploads to a blocked direct conversation are also denied by Storage RLS before a new object can be created. Existing message history and previously shared attachments remain readable; conversations are not deleted. Group chats remain usable even when two members have blocked each other. Unblocking restores access to the prior direct conversation; follow relationships are not automatically restored.
+
+The chat screen checks the server permission before enabling the composer and attachment picker. If the check fails, sending is disabled and the user can retry the permission check. The database policies remain authoritative if a block changes while a screen is open.
+
+Apply `0016_blocked_direct_messaging.sql` after `0015_private_video_delivery.sql`. The PostgreSQL 16 fixture `supabase/tests/0016_blocked_direct_messaging.sql` reuses the video-safety fixture and verifies both block directions, existing-chat restrictions, group-chat behavior, attachment upload denial, retained history, unblock recovery and RPC grants.
 
 ## Important production work still required
 1. Deploy and monitor the scheduled Snap cleanup job; the code and migration are committed, but the live Supabase function, Vault secrets and cron execution still require project-owner setup.
