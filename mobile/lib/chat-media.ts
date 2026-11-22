@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { canSendConversationMessage } from './social';
 import { startMediaUpload } from './uploads';
 import type { ChatMessage } from './types';
 
@@ -48,6 +49,9 @@ export async function sendChatAttachment(
   onProgress?: (progress: number) => void,
 ): Promise<ChatMessage> {
   if (!conversationId || !uri) throw new Error('Choose a conversation and an attachment.');
+  if (!(await canSendConversationMessage(conversationId))) {
+    throw new Error('Direct messaging is unavailable while a block is active.');
+  }
   const mime = (contentType || (mediaType === 'video' ? 'video/mp4' : 'image/jpeg'))
     .split(';')[0].trim().toLowerCase();
   const extension = MIME_EXTENSIONS[mime];
