@@ -143,13 +143,13 @@ begin
   begin
     perform public.create_direct_conversation('00000000-0000-0000-0000-000000000002');
     raise exception 'Expected outgoing block to prevent direct-chat creation';
-  exception when raise_exception then
+  exception when insufficient_privilege then
     if sqlerrm = 'Expected outgoing block to prevent direct-chat creation' then raise; end if;
   end;
   begin
     perform public.create_direct_conversation('00000000-0000-0000-0000-000000000003');
     raise exception 'Expected incoming block to prevent direct-chat creation';
-  exception when raise_exception then
+  exception when insufficient_privilege then
     if sqlerrm = 'Expected incoming block to prevent direct-chat creation' then raise; end if;
   end;
 
@@ -229,7 +229,7 @@ begin
   begin
     perform public.create_direct_conversation('00000000-0000-0000-0000-000000000004');
     raise exception 'Expected a new block to prevent reopening direct messaging';
-  exception when raise_exception then
+  exception when insufficient_privilege then
     if sqlerrm = 'Expected a new block to prevent reopening direct messaging' then raise; end if;
   end;
 
