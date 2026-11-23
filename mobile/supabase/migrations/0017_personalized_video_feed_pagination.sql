@@ -80,6 +80,10 @@ as $$
         or v.user_id = viewer.user_id
         or f.following_id is not null
       )
+      and (
+        v.user_id = viewer.user_id
+        or not public.users_blocked_for_viewer(v.user_id)
+      )
     order by v.created_at desc, v.id asc
     limit (select (feed_limit + feed_offset) * 5 from requested)
   ),
