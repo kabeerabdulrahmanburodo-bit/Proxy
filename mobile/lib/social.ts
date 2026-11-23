@@ -54,54 +54,84 @@ export async function getVideoPlaybackUrl(
   return data.signedUrl;
 }
 
-export async function getVideoFeed(limit = 20): Promise<VideoPost[]> {
+export const VIDEO_FEED_PAGE_SIZE = 20;
+export const VIDEO_FEED_MAX_OFFSET = 200;
+
+type RankedVideoFeedRow = {
+  id: string;
+  user_id: string;
+  caption: string | null;
+  video_url: string;
+  thumbnail_url: string | null;
+  created_at: string;
+  username: string | null;
+  avatar_url: string | null;
+};
+
+function mapRankedVideoRows(rows: RankedVideoFeedRow[] | null | undefined): VideoPost[] {
+  return (rows ?? []).map(row => ({
+    id: row.id,
+    user_id: row.user_id,
+    caption: row.caption,
+    video_url: row.video_url,
+    thumbnail_url: row.thumbnail_url,
+    created_at: row.created_at,
+    profiles: { username: row.username ?? 'creator', avatar_url: row.avatar_url },
+  }));
+}
+
+export async function getVideoFeed(
+  limit = VIDEO_FEED_PAGE_SIZE,
+  offset = 0,
+): Promise<VideoPost[]> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sign in to view your feed.');
-  const requestedLimit = Math.max(1, Math.min(50, Math.floor(limit) || 20));
+  const requestedLimit = Math.max(1, Math.min(50, Math.floor(limit) || VIDEO_FEED_PAGE_SIZE));
+  const requestedOffset = Math.max(0, Math.min(VIDEO_FEED_MAX_OFFSET, Math.floor(offset) || 0));
 
   const { data: ranked, error: rankingError } = await supabase.rpc(
     'get_personalized_video_feed',
-    { p_limit: requestedLimit },
+    { p_limit: requestedLimit, p_offset: requestedOffset },
   );
-  if (!rankingError) {
-    return ((ranked ?? []) as Array<{
-      id: string;
-      user_id: string;
-      caption: string | null;
-      video_url: string;
-      thumbnail_url: string | null;
-      created_at: string;
-      username: string | null;
-      avatar_url: string | null;
-    }>).map(row => ({
-      id: row.id,
-      user_id: row.user_id,
-      caption: row.caption,
-      video_url: row.video_url,
-      thumbnail_url: row.thumbnail_url,
-      created_at: row.created_at,
-      profiles: { username: row.username ?? 'creator', avatar_url: row.avatar_url },
-    }));
-  }
+  if (!rankingError) return mapRankedVideoRows(ranked as RankedVideoFeedRow[] | null);
 
-  // Keep the safe, RLS-filtered chronological feed available if migration 0013
-  // has not been applied yet. Only fall back for a missing RPC, not other errors.
+  // During migration rollout or a delayed PostgREST schema-cache refresh, the
+  // original one-argument RPC remains available for its first 50 ranked results.
   if (rankingError.code !== 'PGRST202' && rankingError.code !== '42883') {
     throw rankingError;
   }
+  const legacyLimit = Math.min(50, requestedOffset + requestedLimit);
+  const { data: legacy, error: legacyError } = await supabase.rpc(
+    'get_personalized_video_feed',
+    { p_limit: legacyLimit },
+  );
+  if (!legacyError) {
+    return mapRankedVideoRows(legacy as RankedVideoFeedRow[] | null)
+      .slice(requestedOffset, requestedOffset + requestedLimit);
+  }
+  if (legacyError.code !== 'PGRST202' && legacyError.code !== '42883') {
+    throw legacyError;
+  }
+
+  // Keep a safe RLS-filtered feed available before migration 0013 is applied.
   const { data: follows, error: followsError } = await supabase
     .from('follows').select('following_id').eq('follower_id', user.id);
   if (followsError) throw followsError;
   const followingIds = (follows ?? []).map(row => row.following_id);
+  const candidateLimit = Math.min(750, (requestedOffset + requestedLimit) * 3);
   const { data, error } = await supabase.from('videos')
     .select('id,user_id,caption,video_url,thumbnail_url,created_at,profiles(username,avatar_url)')
     .in('visibility', ['public', 'followers'])
-    .order('created_at', { ascending: false }).limit(requestedLimit * 3);
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: true })
+    .limit(candidateLimit);
   if (error) throw error;
   const posts = (data ?? []) as unknown as VideoPost[];
   return posts.sort((a, b) =>
-    Number(followingIds.includes(b.user_id)) - Number(followingIds.includes(a.user_id))
-  ).slice(0, requestedLimit);
+    Number(followingIds.includes(b.user_id)) - Number(followingIds.includes(a.user_id)) ||
+    b.created_at.localeCompare(a.created_at) ||
+    a.id.localeCompare(b.id)
+  ).slice(requestedOffset, requestedOffset + requestedLimit);
 }
 
 export async function publishVideo(
