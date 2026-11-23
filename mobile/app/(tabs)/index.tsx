@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, Text, View } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useRouter } from 'expo-router';
-import { blockUser, getVideoFeed, getVideoPlaybackUrl, recordVideoView, reportVideo } from '../../lib/social';
+import { blockUser, getVideoFeed, getVideoPlaybackUrl, recordVideoView, reportVideo, VIDEO_FEED_MAX_OFFSET, VIDEO_FEED_PAGE_SIZE } from '../../lib/social';
 import type { VideoPost, VideoReportReason } from '../../lib/types';
 
 const purple = '#a78bfa', white = '#fafafa', muted = '#a1a1aa';
@@ -112,16 +112,75 @@ export default function Feed() {
   const [busy, setBusy] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadMoreError, setLoadMoreError] = useState(false);
+  const loadingMoreRef = useRef(false);
+  const feedOffsetRef = useRef(0);
+  const feedRequestVersionRef = useRef(0);
   const [reportingPost, setReportingPost] = useState<VideoPost | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
 
   const load = useCallback(async (refresh = false) => {
+    const requestVersion = ++feedRequestVersionRef.current;
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
+    setLoadMoreError(false);
     if (refresh) setRefreshing(true); else setBusy(true);
-    try { setPosts(await getVideoFeed()); }
-    catch (error) { Alert.alert('Feed', error instanceof Error ? error.message : 'Could not load videos.'); }
-    finally { setBusy(false); setRefreshing(false); }
+    try {
+      const page = await getVideoFeed(VIDEO_FEED_PAGE_SIZE, 0);
+      if (requestVersion !== feedRequestVersionRef.current) return;
+      setPosts(page);
+      feedOffsetRef.current = page.length;
+      setHasMore(page.length === VIDEO_FEED_PAGE_SIZE && feedOffsetRef.current < VIDEO_FEED_MAX_OFFSET);
+      setActiveId(null);
+    } catch (error) {
+      if (requestVersion === feedRequestVersionRef.current) {
+        if (!refresh) setHasMore(false);
+        Alert.alert('Feed', error instanceof Error ? error.message : 'Could not load videos.');
+      }
+    } finally {
+      if (requestVersion === feedRequestVersionRef.current) {
+        setBusy(false);
+        setRefreshing(false);
+      }
+    }
   }, []);
   useEffect(() => { void load(); }, [load]);
+
+  const loadMore = useCallback(async () => {
+    if (busy || refreshing || !hasMore || loadingMoreRef.current) return;
+    const offset = feedOffsetRef.current;
+    if (offset >= VIDEO_FEED_MAX_OFFSET) {
+      setHasMore(false);
+      return;
+    }
+
+    const requestVersion = feedRequestVersionRef.current;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    setLoadMoreError(false);
+    try {
+      const page = await getVideoFeed(VIDEO_FEED_PAGE_SIZE, offset);
+      if (requestVersion !== feedRequestVersionRef.current) return;
+      feedOffsetRef.current = Math.min(VIDEO_FEED_MAX_OFFSET, offset + page.length);
+      const existingIds = new Set(posts.map(post => post.id));
+      const uniquePage = page.filter(post => !existingIds.has(post.id));
+      setPosts(current => {
+        const currentIds = new Set(current.map(post => post.id));
+        return [...current, ...uniquePage.filter(post => !currentIds.has(post.id))];
+      });
+      setHasMore(
+        page.length === VIDEO_FEED_PAGE_SIZE &&
+        feedOffsetRef.current < VIDEO_FEED_MAX_OFFSET
+      );
+    } catch {
+      if (requestVersion === feedRequestVersionRef.current) setLoadMoreError(true);
+    } finally {
+      loadingMoreRef.current = false;
+      if (requestVersion === feedRequestVersionRef.current) setLoadingMore(false);
+    }
+  }, [busy, refreshing, hasMore, posts]);
 
   function openVideoOptions(post: VideoPost) {
     Alert.alert('Video options', '@' + (post.profiles?.username ?? 'creator'), [
@@ -212,8 +271,17 @@ export default function Feed() {
           decelerationRate="fast"
           viewabilityConfig={viewabilityConfig}
           onViewableItemsChanged={onViewableItemsChanged}
+          onEndReached={() => void loadMore()}
+          onEndReachedThreshold={0.65}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={purple} />}
           contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 12 }}
+          ListFooterComponent={loadingMore ? (
+            <ActivityIndicator color={purple} style={{ paddingVertical: 20 }} />
+          ) : loadMoreError ? (
+            <Pressable onPress={() => void loadMore()} style={{ alignItems: 'center', padding: 18 }}>
+              <Text style={{ color: purple, fontWeight: '800' }}>COULD NOT LOAD MORE · TAP TO RETRY</Text>
+            </Pressable>
+          ) : null}
           ListEmptyComponent={<View style={{ padding: 28, marginTop: 70, alignItems: 'center' }}>
             <Text style={{ color: white, fontSize: 20, fontWeight: '800' }}>Your feed starts here.</Text>
             <Text style={{ color: muted, textAlign: 'center', lineHeight: 22, marginTop: 8 }}>Post the first video or follow creators to fill your For You feed.</Text>
