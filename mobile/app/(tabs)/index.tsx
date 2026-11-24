@@ -12,12 +12,32 @@ function VideoCard({ post, active, onOptions }: { post: VideoPost; active: boole
   const player = useVideoPlayer(null, instance => { instance.loop = true; });
   const [playbackReady, setPlaybackReady] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [playbackAttempt, setPlaybackAttempt] = useState(0);
+
+  // Player state changes are asynchronous. Do not hide the loading state just
+  // because a signed URL was assigned; wait until expo-video can actually play.
+  useEffect(() => {
+    if (!active) return;
+    const subscription = player.addListener('statusChange', ({ status }) => {
+      if (status === 'readyToPlay') {
+        setPlaybackReady(true);
+        setPlaybackError(null);
+      } else if (status === 'loading') {
+        setPlaybackReady(false);
+      } else if (status === 'error') {
+        setPlaybackReady(false);
+        setPlaybackError('This video could not be played. Check your connection and try again.');
+      }
+    });
+    return () => subscription.remove();
+  }, [active, player]);
 
   useEffect(() => {
     let cancelled = false;
     if (!active) {
       player.pause();
       setPlaybackReady(false);
+      setPlaybackError(null);
       return () => { cancelled = true; };
     }
 
@@ -29,12 +49,13 @@ function VideoCard({ post, active, onOptions }: { post: VideoPost; active: boole
         // to a card therefore gets a fresh five-minute URL after a previous one expires.
         const signedUrl = await getVideoPlaybackUrl(post);
         if (cancelled) return;
-        player.replace(signedUrl);
-        player.play();
-        setPlaybackReady(true);
-      } catch (error) {
+        await player.replaceAsync(signedUrl);
         if (cancelled) return;
-        setPlaybackError(error instanceof Error ? error.message : 'This video could not be opened.');
+        player.play();
+        if (player.status === 'readyToPlay') setPlaybackReady(true);
+      } catch {
+        if (cancelled) return;
+        setPlaybackError('This video could not be opened. Check your connection and try again.');
       }
     })();
 
@@ -42,7 +63,7 @@ function VideoCard({ post, active, onOptions }: { post: VideoPost; active: boole
       cancelled = true;
       player.pause();
     };
-  }, [active, player, post.id, post.user_id, post.video_url]);
+  }, [active, player, post.id, post.user_id, post.video_url, playbackAttempt]);
 
   useEffect(() => {
     if (!active) return;
@@ -82,8 +103,16 @@ function VideoCard({ post, active, onOptions }: { post: VideoPost; active: boole
         </View>
       ) : null}
       {active && playbackError ? (
-        <View pointerEvents="none" style={{ position: 'absolute', left: 24, right: 24, top: '42%', padding: 14, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.72)' }}>
+        <View style={{ position: 'absolute', left: 24, right: 24, top: '40%', alignItems: 'center', padding: 16, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.82)' }}>
           <Text style={{ color: white, textAlign: 'center', fontSize: 12, lineHeight: 18 }}>{playbackError}</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Retry video playback"
+            onPress={() => setPlaybackAttempt(attempt => attempt + 1)}
+            style={{ marginTop: 14, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 20, backgroundColor: purple }}
+          >
+            <Text style={{ color: '#181024', fontSize: 11, fontWeight: '900' }}>RETRY PLAYBACK</Text>
+          </Pressable>
         </View>
       ) : null}
       <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 20, paddingTop: 70, backgroundColor: 'rgba(0,0,0,0.28)' }}>
