@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { publishVideo } from '../lib/social';
@@ -56,6 +56,7 @@ export default function PublishVideo() {
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: '#09090b', padding: 22, paddingTop: 58 }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 28 }} keyboardShouldPersistTaps="handled">
       <Pressable onPress={() => router.back()}><Text style={{ color: purple, fontWeight: '800' }}>‹ BACK</Text></Pressable>
       <Text style={{ color: white, fontSize: 29, fontWeight: '900', marginTop: 28 }}>Share a video.</Text>
       <Text style={{ color: muted, marginTop: 8, lineHeight: 22 }}>Choose a clip up to 3 minutes, add a caption, and publish it to Discover.</Text>
@@ -105,6 +106,7 @@ export default function PublishVideo() {
       <Pressable onPress={submit} disabled={busy || !asset} style={{ backgroundColor: !asset || busy ? '#4c3d6d' : purple, padding: 17, borderRadius: 15, alignItems: 'center', marginTop: 22 }}>
         {busy ? <ActivityIndicator color="#181024" /> : <Text style={{ color: '#181024', fontWeight: '900' }}>PUBLISH VIDEO</Text>}
       </Pressable>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
