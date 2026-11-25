@@ -1,5 +1,6 @@
 import {
   ORPHAN_STAGED_FILE_GRACE_MS,
+  resolveVideoVisibility,
   shouldDeleteOrphanedStagedFile,
   shouldRequireStagedFile,
 } from "../../../lib/upload-queue-policy.ts";
@@ -52,4 +53,33 @@ Deno.test("a completed remote object can be finalized without the local staged c
   if (!shouldRequireStagedFile(false)) {
     throw new Error("A missing remote object still requires the staged file");
   }
+});
+
+
+Deno.test("legacy video upload jobs without an audience remain public", () => {
+  if (resolveVideoVisibility(undefined) !== "public") {
+    throw new Error("Legacy upload jobs must preserve their previous public behavior");
+  }
+});
+
+Deno.test("followers-only audience survives upload queue recovery", () => {
+  if (resolveVideoVisibility("followers") !== "followers") {
+    throw new Error("Followers-only visibility must be preserved during finalization");
+  }
+});
+
+Deno.test("private audience remains private for persisted jobs", () => {
+  if (resolveVideoVisibility("private") !== "private") {
+    throw new Error("Private visibility must not be widened during upload recovery");
+  }
+});
+
+Deno.test("invalid persisted video visibility fails closed", () => {
+  let rejected = false;
+  try {
+    resolveVideoVisibility("friends");
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) throw new Error("Unknown visibility values must not silently become public");
 });

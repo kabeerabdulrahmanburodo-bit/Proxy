@@ -3,8 +3,8 @@ import { AppState } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as tus from 'tus-js-client';
 import { supabase } from './supabase';
-import { shouldDeleteOrphanedStagedFile, shouldRequireStagedFile } from './upload-queue-policy';
-import type { ChatMessage, Snap, VideoPost } from './types';
+import { resolveVideoVisibility, shouldDeleteOrphanedStagedFile, shouldRequireStagedFile } from './upload-queue-policy';
+import type { ChatMessage, Snap, VideoPost, VideoVisibility } from './types';
 
 export type MediaUploadPurpose = 'video-post' | 'chat-attachment' | 'snap';
 export type MediaUploadStatus = 'queued' | 'uploading' | 'paused' | 'failed';
@@ -24,6 +24,7 @@ export interface MediaUploadJob {
   status: MediaUploadStatus;
   lastError?: string;
   caption?: string;
+  visibility?: VideoVisibility;
   conversationId?: string;
   mediaType?: 'image' | 'video';
   lifetimeHours?: number;
@@ -36,6 +37,7 @@ interface CreateMediaUploadInput {
   purpose: MediaUploadPurpose;
   maxBytes: number;
   caption?: string;
+  visibility?: VideoVisibility;
   conversationId?: string;
   mediaType?: 'image' | 'video';
   lifetimeHours?: number;
@@ -170,6 +172,9 @@ export async function createMediaUploadJob(input: CreateMediaUploadInput): Promi
   if (input.purpose === 'video-post' && (input.caption?.length ?? 0) > 2200) {
     throw new Error('Caption must be 2,200 characters or fewer.');
   }
+  const videoVisibility = input.purpose === 'video-post'
+    ? resolveVideoVisibility(input.visibility)
+    : undefined;
   if (input.purpose === 'chat-attachment' && (!input.conversationId || !input.mediaType)) {
     throw new Error('A conversation and attachment type are required.');
   }
@@ -231,6 +236,7 @@ export async function createMediaUploadJob(input: CreateMediaUploadInput): Promi
     progress: 0,
     status: 'queued',
     caption: input.purpose === 'video-post' ? (input.caption || '').trim() : undefined,
+    visibility: videoVisibility,
     conversationId: input.conversationId,
     mediaType: input.mediaType,
     lifetimeHours: input.purpose === 'snap' ? (input.lifetimeHours ?? 24) : undefined,
@@ -430,7 +436,7 @@ async function finalizeUpload(job: MediaUploadJob): Promise<VideoPost | ChatMess
       user_id: job.ownerId,
       caption: job.caption || null,
       video_url: job.objectPath,
-      visibility: 'public',
+      visibility: resolveVideoVisibility(job.visibility),
     }).select('id,user_id,caption,video_url,thumbnail_url,created_at').single();
     if (error) throw error;
     return data as VideoPost;
@@ -579,6 +585,14 @@ export async function resumeMediaUpload(
     if (!job) throw new Error('This pending upload could not be found.');
     const { data: { user } } = await supabase.auth.getUser();
     if (!user || user.id !== job.ownerId) throw new Error('Sign in with the account that started this upload.');
+
+    if (job.purpose === 'video-post') {
+      const visibility = resolveVideoVisibility(job.visibility);
+      if (job.visibility !== visibility) {
+        job = { ...job, visibility };
+        await updateJob(job.id, { visibility });
+      }
+    }
 
     await updateJob(job.id, { status: 'uploading', lastError: undefined });
     const objectExists = await getObjectExists(job);

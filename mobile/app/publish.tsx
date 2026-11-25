@@ -3,12 +3,18 @@ import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, Te
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { publishVideo } from '../lib/social';
+import type { VideoVisibility } from '../lib/types';
 
 const purple = '#a78bfa', white = '#fafafa', muted = '#a1a1aa';
+const visibilityOptions: { value: VideoVisibility; label: string }[] = [
+  { value: 'public', label: 'PUBLIC' },
+  { value: 'followers', label: 'FOLLOWERS' },
+];
 export default function PublishVideo() {
   const router = useRouter();
   const [asset, setAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [caption, setCaption] = useState('');
+  const [visibility, setVisibility] = useState<VideoVisibility>('public');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
 
@@ -31,8 +37,14 @@ export default function PublishVideo() {
       const fileName = asset.fileName || 'proxy-video.mp4';
       const mime = asset.mimeType || 'video/mp4';
       setProgress(0);
-      await publishVideo(asset.uri, fileName, mime, caption, setProgress);
-      Alert.alert('Published', 'Your video is now in the PROXY feed.', [{ text: 'OK', onPress: () => router.back() }]);
+      await publishVideo(asset.uri, fileName, mime, caption, setProgress, visibility);
+      Alert.alert(
+        'Published',
+        visibility === 'followers'
+          ? 'Your video is available to people who follow you.'
+          : 'Your video is now available to signed-in PROXY viewers.',
+        [{ text: 'OK', onPress: () => router.back() }],
+      );
     } catch (error) {
       Alert.alert(
         'Upload paused',
@@ -54,6 +66,32 @@ export default function PublishVideo() {
       </Pressable>
       <TextInput value={caption} onChangeText={setCaption} placeholder="Write a caption…" placeholderTextColor="#71717a" multiline maxLength={2200} editable={!busy} style={{ color: white, minHeight: 110, borderRadius: 14, borderWidth: 1, borderColor: '#3f3f46', padding: 15, marginTop: 20, textAlignVertical: 'top' }} />
       <Text style={{ color: muted, textAlign: 'right', marginTop: 6, fontSize: 11 }}>{caption.length}/2200</Text>
+      <View style={{ marginTop: 16 }}>
+        <Text style={{ color: white, fontSize: 11, fontWeight: '900', letterSpacing: 1 }}>WHO CAN WATCH?</Text>
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 9 }}>
+          {visibilityOptions.map(option => {
+            const selected = visibility === option.value;
+            return (
+              <Pressable
+                key={option.value}
+                accessibilityRole="button"
+                accessibilityLabel={option.value === 'public' ? 'Public video audience' : 'Followers-only video audience'}
+                accessibilityState={{ selected }}
+                onPress={() => setVisibility(option.value)}
+                disabled={busy}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: selected ? purple : '#3f3f46', backgroundColor: selected ? '#302844' : '#18181b' }}
+              >
+                <Text style={{ color: selected ? purple : muted, fontSize: 11, fontWeight: '900' }}>{option.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <Text style={{ color: muted, fontSize: 10, lineHeight: 15, marginTop: 7 }}>
+          {visibility === 'followers'
+            ? 'Only accounts that currently follow you can watch this video.'
+            : 'Any signed-in PROXY viewer can watch this video and it may appear in Discover.'}
+        </Text>
+      </View>
       {busy ? (
         <View style={{ marginTop: 18 }}>
           <View style={{ height: 7, borderRadius: 4, backgroundColor: '#27272a', overflow: 'hidden' }}>

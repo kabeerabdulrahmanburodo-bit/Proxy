@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { startMediaUpload } from './uploads';
 import type {
   ChatMessage, ConversationDetails, ConversationPresence, ConversationSummary, MessageReadReceipt,
-  BlockedUser, Snap, SnapStory, SnapStoryGroup, UserSearchResult, VideoPost, VideoReportReason,
+  BlockedUser, Snap, SnapStory, SnapStoryGroup, UserSearchResult, VideoPost, VideoReportReason, VideoVisibility,
 } from './types';
 
 export const MESSAGE_PAGE_SIZE = 30;
@@ -140,6 +140,7 @@ export async function publishVideo(
   contentType: string,
   caption: string,
   onProgress?: (progress: number) => void,
+  visibility: VideoVisibility = 'public',
 ): Promise<VideoPost> {
   return await startMediaUpload({
     uri,
@@ -148,6 +149,7 @@ export async function publishVideo(
     purpose: 'video-post',
     maxBytes: 500 * 1024 * 1024,
     caption: caption.trim(),
+    visibility,
   }, onProgress) as VideoPost;
 }
 

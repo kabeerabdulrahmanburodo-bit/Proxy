@@ -2,6 +2,8 @@
 
 ## Current behavior
 
+Video posts persist their selected Public or Followers-only audience in the same queue record as the staged media. The audience is applied only when the matching PostgreSQL `videos` row is finalized, so retries cannot accidentally publish a followers-only clip as public. Legacy queue records without an audience retain the prior Public default; unknown values fail closed.
+
 Feed videos, private chat attachments and 24-hour Snaps are staged in the app's persistent document directory and uploaded to Supabase Storage with resumable TUS sessions using 6 MiB chunks. Queue metadata and TUS session URLs are stored in AsyncStorage; authentication tokens are refreshed at request time and are not persisted in the queue.
 
 The app pauses the JavaScript TUS loop when it backgrounds and resumes it when it returns. After an app restart, the pending-upload screen can resume from the saved TUS session. Supabase TUS sessions are discarded locally after 23 hours so the client starts a fresh session before the server's 24-hour session expiry.
