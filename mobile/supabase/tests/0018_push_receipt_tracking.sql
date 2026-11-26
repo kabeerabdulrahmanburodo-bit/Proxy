@@ -42,16 +42,16 @@ values
   ('10000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000002'),
   ('10000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000003');
 
-insert into public.push_receipt_tickets(outbox_id, ticket_id, push_device_id)
-select '10000000-0000-0000-0000-000000000001', 'receipt-ok', id
+insert into public.push_receipt_tickets(outbox_id, ticket_id, push_device_id, created_at)
+select '10000000-0000-0000-0000-000000000001', 'receipt-ok', id, now() - interval '20 minutes'
 from public.push_devices where expo_push_token = 'ExponentPushToken[device-one]';
 
-insert into public.push_receipt_tickets(outbox_id, ticket_id, push_device_id)
-select '10000000-0000-0000-0000-000000000002', 'receipt-device-gone', id
+insert into public.push_receipt_tickets(outbox_id, ticket_id, push_device_id, created_at)
+select '10000000-0000-0000-0000-000000000002', 'receipt-device-gone', id, now() - interval '19 minutes'
 from public.push_devices where expo_push_token = 'ExponentPushToken[device-two]';
 
-insert into public.push_receipt_tickets(outbox_id, ticket_id, push_device_id)
-select '10000000-0000-0000-0000-000000000003', 'receipt-reclaim', id
+insert into public.push_receipt_tickets(outbox_id, ticket_id, push_device_id, created_at)
+select '10000000-0000-0000-0000-000000000003', 'receipt-reclaim', id, now() - interval '18 minutes'
 from public.push_devices where expo_push_token = 'ExponentPushToken[device-three]';
 
 do $$
@@ -77,16 +77,14 @@ do $$
 declare
   claimed record;
   is_enabled boolean;
+  attempt_count integer;
   receipt_id uuid;
 begin
   select * into claimed
   from public.claim_push_receipt_tickets(1);
 
-  if claimed.ticket_id <> 'receipt-ok' or claimed.attempts is not null then
-    -- The RPC deliberately returns only ticket identifiers and the device reference.
-    if claimed.ticket_id <> 'receipt-ok' then
-      raise exception 'The oldest eligible receipt should be claimed first';
-    end if;
+  if claimed.ticket_id <> 'receipt-ok' then
+    raise exception 'The oldest eligible receipt should be claimed first';
   end if;
 
   receipt_id := claimed.id;
@@ -125,8 +123,8 @@ begin
   if claimed.ticket_id <> 'receipt-reclaim' then
     raise exception 'A stale processing receipt should be reclaimed';
   end if;
-  select attempts into is_enabled from public.push_receipt_tickets where id = claimed.id;
-  if is_enabled is distinct from true then
+  select attempts into attempt_count from public.push_receipt_tickets where id = claimed.id;
+  if attempt_count is distinct from 2 then
     raise exception 'Reclaimed receipt attempts should increment';
   end if;
 
