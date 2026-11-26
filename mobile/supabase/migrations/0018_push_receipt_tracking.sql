@@ -66,8 +66,8 @@ begin
           and receipt.claimed_at < now() - interval '20 minutes')
       )
     order by receipt.created_at, receipt.id
-    for update skip locked
     limit greatest(1, least(coalesce(maximum_count, 300), 300))
+    for update skip locked
   )
   update public.push_receipt_tickets as receipt
      set status = 'processing',
@@ -96,7 +96,7 @@ declare
   target_device_id uuid;
   final_status text;
 begin
-  if receipt_status not in ('ok', 'error', 'pending') then
+  if receipt_status is null or receipt_status not in ('ok', 'error', 'pending') then
     raise exception 'Invalid push receipt status';
   end if;
 
