@@ -16,7 +16,7 @@ cp .env.example .env
 npx expo start
 ~~~
 
-In Supabase SQL Editor, run migrations 0001 through 0018 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migrations 0014, 0015, 0016, 0017 and 0018 in filename order. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
+In Supabase SQL Editor, run migrations 0001 through 0017 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migrations 0014, 0015, 0016 and 0017. Apply migration 0018 only after the push-receipt secret and its Edge Function are configured as described below. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
 
 ## Current implementation
 - Expo Router mobile shell with Discover, Chats, Snaps and Profile tabs
@@ -65,29 +65,30 @@ Migration 0009 creates:
 PostgreSQL creates in-app notification rows for new direct/group messages, follows, video likes and video comments. An insert trigger adds eligible events to the private outbox unless that category is disabled. The send Edge Function claims an outbox row atomically, sends Expo Push Service messages in batches, persists successful ticket IDs with an internal push-device UUID (never the raw token), and disables tokens rejected as DeviceNotRegistered. A separate receipt worker polls Expo's receipt endpoint after the 15-minute availability window, records final success/error status, and disables only the device associated with a DeviceNotRegistered receipt. Missing receipts are retried on the next schedule; after 20 unsuccessful polls they are marked unavailable without disabling the device. Both endpoints require separate server-only secrets; the service-role key remains server-side.
 
 ### Push deployment (required; not completed by this repository commit)
-1. Complete the Snap cleanup prerequisites for migration 0012. Link the Supabase project from mobile/ and deploy both Edge Functions:
+1. Complete the migration 0012 Snap-cleanup prerequisites first: deploy `cleanup-expired-snaps`, set `PROXY_SNAP_CLEANUP_SECRET`, and create `proxy_project_url`, `proxy_publishable_key` and `proxy_snap_cleanup_secret` in Supabase Vault.
+2. Generate two independent random secrets (at least 32 characters each) and set the Edge Function secrets:
+   ```bash
+   supabase secrets set PROXY_PUSH_WEBHOOK_SECRET="<webhook-secret>" PROXY_PUSH_RECEIPT_SECRET="<receipt-secret>"
+   ```
+   Supabase supplies SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Edge Functions. Never copy either value into the app or repository.
+3. In Supabase Vault, create `proxy_push_receipt_secret` with the same value as PROXY_PUSH_RECEIPT_SECRET. Migration 0018 also reads the existing `proxy_project_url` and `proxy_publishable_key`; do not query or print decrypted Vault values.
+4. Apply migrations 0001 through 0017 in order, respecting the migration 0012 prerequisites, then apply `0018_push_receipt_tracking.sql`. It adds the private ticket table and service-role-only claim/finalize RPCs and schedules a 15-minute receipt poller when the three required Vault secrets exist. If the receipt secret was added after migration 0018 was first applied, re-run migration 0018 to install/update the cron job.
+5. Deploy the push Edge Functions:
    ```bash
    supabase functions deploy send-push-notification
    supabase functions deploy process-push-receipts
    ```
    Both endpoints have JWT verification disabled only because they are called by server webhooks/cron; each requires its own dedicated secret header.
-2. Set two independent random Edge Function secrets (at least 32 characters each):
-   ```bash
-   supabase secrets set PROXY_PUSH_WEBHOOK_SECRET="<webhook-secret>" PROXY_PUSH_RECEIPT_SECRET="<receipt-secret>"
-   ```
-   Supabase supplies SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Edge Functions. Never copy either value into the app or repository.
-3. In Supabase Vault, create `proxy_push_receipt_secret` with the same value as PROXY_PUSH_RECEIPT_SECRET. Migration 0012 already requires `proxy_project_url` and `proxy_publishable_key`; migration 0018 uses those existing secrets plus the receipt secret to schedule the poller. Do not query or print decrypted Vault values.
-4. Apply migrations 0001 through 0017 in order, respecting the migration 0012 cleanup prerequisites, then apply `0018_push_receipt_tracking.sql`. It adds the private ticket table and service-role-only claim/finalize RPCs. If the Vault receipt secret was added after migration 0018 was first applied, re-run migration 0018 to install/update the 15-minute cron job.
-5. In Supabase Dashboard, create a Database Webhook for INSERT on `public.push_outbox`, targeting the deployed `send-push-notification` function URL. Add `x-proxy-webhook-secret` with PROXY_PUSH_WEBHOOK_SECRET. Do not expose this secret in the mobile app or repository.
-6. Verify the scheduled receipt poller:
+6. In Supabase Dashboard, create a Database Webhook for INSERT on `public.push_outbox`, targeting the deployed `send-push-notification` function URL. Add `x-proxy-webhook-secret` with PROXY_PUSH_WEBHOOK_SECRET. Do not expose this secret in the mobile app or repository.
+7. Verify the scheduled receipt poller:
    ```sql
    select jobid, jobname, schedule, active
    from cron.job
    where jobname = 'proxy-push-receipt-poll';
    ```
    Inspect recent `cron.job_run_details` and service-role-only `push_receipt_tickets` rows through an authorized operator connection. The worker claims at most 300 tickets per run and polls receipts no earlier than 15 minutes after ticket creation.
-7. Run `eas init` in mobile/, add the generated EAS project ID to `expo.extra.eas.projectId` in app.json, configure APNs/FCM credentials in EAS, and create a development/release build. Use a physical device for push verification; Android Expo Go does not support remote push for SDK 54.
-8. Enable notifications from Profile on the device. Users can disable this device or switch message/follow/like/comment categories independently.
+8. Run `eas init` in mobile/, add the generated EAS project ID to `expo.extra.eas.projectId` in app.json, configure APNs/FCM credentials in EAS, and create a development/release build. Use a physical device for push verification; Android Expo Go does not support remote push for SDK 54.
+9. Enable notifications from Profile on the device. Users can disable this device or switch message/follow/like/comment categories independently.
 
 An Expo ticket with status `ok` means the push service accepted the message, not that the operating system delivered it. Receipt polling records the later Expo receipt result; it still cannot prove that a person saw the notification. Missing receipts are retried on later runs and capped at 20 attempts. No service credentials or webhook secrets are committed.
 
