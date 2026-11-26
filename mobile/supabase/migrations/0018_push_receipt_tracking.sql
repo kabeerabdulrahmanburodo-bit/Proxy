@@ -53,6 +53,24 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
+  update public.push_receipt_tickets as receipt
+     set status = 'error',
+         claimed_at = null,
+         checked_at = now(),
+         error_code = coalesce(receipt.error_code, 'ReceiptUnavailable'),
+         error_message = coalesce(
+           receipt.error_message,
+           'Expo receipt remained unavailable after 20 polling attempts.'
+         )
+   where receipt.attempts >= 20
+     and (
+       receipt.status = 'pending'
+       or (
+         receipt.status = 'processing'
+         and receipt.claimed_at < now() - interval '20 minutes'
+       )
+     );
+
   return query
   with candidates as (
     select receipt.id as receipt_id
