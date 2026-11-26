@@ -16,7 +16,7 @@ cp .env.example .env
 npx expo start
 ~~~
 
-In Supabase SQL Editor, run migrations 0001 through 0017 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migrations 0014, 0015, 0016 and 0017 in filename order. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
+In Supabase SQL Editor, run migrations 0001 through 0018 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migrations 0014, 0015, 0016, 0017 and 0018 in filename order. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
 
 ## Current implementation
 - Expo Router mobile shell with Discover, Chats, Snaps and Profile tabs
@@ -38,7 +38,7 @@ In Supabase SQL Editor, run migrations 0001 through 0017 in filename order. Befo
 - Resumable Snap photo/video uploads to the private `snaps` bucket, with 24-hour expiry metadata and owner/follower-scoped media access
 - Active Snap story tray grouped by creator, with sequential photo/video playback, expiry-aware advancement and short-lived signed URLs
 - Per-viewer Snap receipts recorded once per story; owners can see the view count for their own Snaps
-- Device push registration, per-category notification preferences and push tap navigation
+- Device push registration, per-category notification preferences, Expo delivery-receipt polling and push tap navigation
 - Video reporting and mutual creator blocking, with server-side feed/profile/Story filtering and a blocked-account management list
 
 ## Messaging behavior and security
@@ -62,17 +62,34 @@ Migration 0009 creates:
 - notification_preferences, with separate message, follow, like and comment switches protected by per-user RLS
 - push_outbox, which has no client policies or client grants and is accessible only to the server-side service role
 
-PostgreSQL creates in-app notification rows for new direct/group messages, follows, video likes and video comments. An insert trigger adds eligible events to the private outbox unless that category is disabled. The Edge Function claims an outbox row atomically, sends Expo Push Service messages in batches, disables tokens reported as DeviceNotRegistered, and records Expo ticket acceptance/failure. An accepted Expo ticket is not proof of final device delivery; push receipt polling is not implemented yet. A webhook secret protects the Edge Function endpoint; the service-role key remains server-side.
+PostgreSQL creates in-app notification rows for new direct/group messages, follows, video likes and video comments. An insert trigger adds eligible events to the private outbox unless that category is disabled. The send Edge Function claims an outbox row atomically, sends Expo Push Service messages in batches, persists successful ticket IDs with an internal push-device UUID (never the raw token), and disables tokens rejected as DeviceNotRegistered. A separate receipt worker polls Expo's receipt endpoint after the 15-minute availability window, records final success/error status, and disables only the device associated with a DeviceNotRegistered receipt. Missing receipts are retried on the next schedule; after 20 unsuccessful polls they are marked unavailable without disabling the device. Both endpoints require separate server-only secrets; the service-role key remains server-side.
 
 ### Push deployment (required; not completed by this repository commit)
-1. Run migrations 0001 through 0017 in order, following the Snap cleanup prerequisites below before applying 0012.
-2. Link the Supabase project from mobile/ with the Supabase CLI and deploy supabase/functions/send-push-notification. Only this function has JWT verification disabled; it requires the x-proxy-webhook-secret header.
-3. Set the Edge Function secret PROXY_PUSH_WEBHOOK_SECRET to a long random value. Supabase supplies SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Edge Functions; do not copy either into the app.
-4. In Supabase Dashboard, create a Database Webhook for INSERT on public.push_outbox, targeting the deployed send-push-notification function URL. Add a custom header named x-proxy-webhook-secret with the same secret. Do not expose that secret in the mobile app or repository.
-5. Run eas init in mobile/, then add the generated EAS project ID to expo.extra.eas.projectId in app.json. Configure APNs and FCM credentials in EAS and create a development/release build. Use a development or release build on a physical device for reliable push testing; Android Expo Go does not support remote push for SDK 54.
-6. Enable notifications from Profile on the device. Users can disable this device or switch message/follow/like/comment categories independently.
+1. Complete the Snap cleanup prerequisites for migration 0012. Link the Supabase project from mobile/ and deploy both Edge Functions:
+   ```bash
+   supabase functions deploy send-push-notification
+   supabase functions deploy process-push-receipts
+   ```
+   Both endpoints have JWT verification disabled only because they are called by server webhooks/cron; each requires its own dedicated secret header.
+2. Set two independent random Edge Function secrets (at least 32 characters each):
+   ```bash
+   supabase secrets set PROXY_PUSH_WEBHOOK_SECRET="<webhook-secret>" PROXY_PUSH_RECEIPT_SECRET="<receipt-secret>"
+   ```
+   Supabase supplies SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Edge Functions. Never copy either value into the app or repository.
+3. In Supabase Vault, create `proxy_push_receipt_secret` with the same value as PROXY_PUSH_RECEIPT_SECRET. Migration 0012 already requires `proxy_project_url` and `proxy_publishable_key`; migration 0018 uses those existing secrets plus the receipt secret to schedule the poller. Do not query or print decrypted Vault values.
+4. Apply migrations 0001 through 0017 in order, respecting the migration 0012 cleanup prerequisites, then apply `0018_push_receipt_tracking.sql`. It adds the private ticket table and service-role-only claim/finalize RPCs. If the Vault receipt secret was added after migration 0018 was first applied, re-run migration 0018 to install/update the 15-minute cron job.
+5. In Supabase Dashboard, create a Database Webhook for INSERT on `public.push_outbox`, targeting the deployed `send-push-notification` function URL. Add `x-proxy-webhook-secret` with PROXY_PUSH_WEBHOOK_SECRET. Do not expose this secret in the mobile app or repository.
+6. Verify the scheduled receipt poller:
+   ```sql
+   select jobid, jobname, schedule, active
+   from cron.job
+   where jobname = 'proxy-push-receipt-poll';
+   ```
+   Inspect recent `cron.job_run_details` and service-role-only `push_receipt_tickets` rows through an authorized operator connection. The worker claims at most 300 tickets per run and polls receipts no earlier than 15 minutes after ticket creation.
+7. Run `eas init` in mobile/, add the generated EAS project ID to `expo.extra.eas.projectId` in app.json, configure APNs/FCM credentials in EAS, and create a development/release build. Use a physical device for push verification; Android Expo Go does not support remote push for SDK 54.
+8. Enable notifications from Profile on the device. Users can disable this device or switch message/follow/like/comment categories independently.
 
-If a push delivery attempt fails, the outbox records the failure and attempt count. A server operator can reset a failed row to pending and re-invoke the webhook/function after correcting the cause. No service credentials or webhook secret are committed.
+An Expo ticket with status `ok` means the push service accepted the message, not that the operating system delivered it. Receipt polling records the later Expo receipt result; it still cannot prove that a person saw the notification. Missing receipts are retried on later runs and capped at 20 attempts. No service credentials or webhook secrets are committed.
 
 ## Video feed behavior and limits
 The publish screen defaults to Public and also supports Followers-only. The selected audience is persisted in the local resumable upload job and applied only when the matching `videos` row is finalized; older queued jobs without an audience retain their previous Public behavior. Unknown persisted audience values fail closed instead of silently widening access. Migration 0015's private Storage RLS and the personalized feed RPC enforce the same audience after publication.
@@ -177,7 +194,7 @@ The chat screen checks the server permission before enabling the composer and at
 Apply `0016_blocked_direct_messaging.sql` after `0015_private_video_delivery.sql`. The PostgreSQL 16 fixture `supabase/tests/0016_blocked_direct_messaging.sql` reuses the video-safety fixture and verifies both block directions, existing-chat restrictions, group-chat behavior, attachment upload denial, retained history, unblock recovery and RPC grants.
 
 ## Important production work still required
-1. Deploy and monitor the scheduled Snap cleanup job; the code and migration are committed, but the live Supabase function, Vault secrets and cron execution still require project-owner setup.
+1. Deploy and monitor the scheduled Snap cleanup and push-receipt jobs; their functions, Vault secrets and cron schedules still require project-owner setup.
 2. Add native OS-managed background transfer; the current queue resumes in the foreground after app restarts but does not run while the OS suspends the app.
 3. Add a trusted moderation console and enforcement workflow for pending video reports; keep signed playback URLs short-lived; an already issued URL remains usable until its five-minute expiry.
 4. Implement WebRTC calling with a native WebRTC module, signaling, STUN/TURN credentials, call lifecycle, permissions, reconnect handling and abuse controls. Native WebRTC is not supported in Expo Go; use an Expo development build / EAS Build.
