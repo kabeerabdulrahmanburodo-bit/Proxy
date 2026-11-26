@@ -39,10 +39,13 @@ jobs:
           deno-version: v2.x
       - name: Type-check Supabase Edge Functions
         working-directory: mobile
-        run: deno check supabase/functions/send-push-notification/index.ts supabase/functions/cleanup-expired-snaps/index.ts
+        run: deno check supabase/functions/send-push-notification/index.ts supabase/functions/cleanup-expired-snaps/index.ts supabase/functions/process-push-receipts/index.ts
       - name: Test Snap cleanup path validation
         working-directory: mobile
         run: deno test supabase/functions/cleanup-expired-snaps/index.test.ts
       - name: Test upload queue cleanup policy
         working-directory: mobile
         run: deno test supabase/functions/cleanup-expired-snaps/upload-queue-policy.test.ts
+      - name: Test Expo push receipt parsing and batching
+        working-directory: mobile
+        run: deno test supabase/functions/process-push-receipts/index.test.ts
