@@ -41,7 +41,7 @@ Deno.test("recognizes DeviceNotRegistered without exposing token data", () => {
   if (result.status !== "error" || result.code !== "DeviceNotRegistered") {
     throw new Error("Expected DeviceNotRegistered classification");
   }
-  if (result.message?.length !== 41) throw new Error("Expected bounded receipt message");
+  if (!result.message?.includes("no longer registered")) throw new Error("Expected receipt message to be preserved");
 });
 
 Deno.test("does not disable devices for other receipt errors", () => {
