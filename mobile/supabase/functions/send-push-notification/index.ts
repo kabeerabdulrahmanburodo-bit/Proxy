@@ -10,9 +10,15 @@ type PushJob = {
 };
 
 type ExpoTicket = {
+  id?: string;
   status?: "ok" | "error";
   message?: string;
   details?: { error?: string };
+};
+
+type PushDevice = {
+  id: string;
+  expo_push_token: string;
 };
 
 function json(body: Record<string, unknown>, status = 200) {
@@ -65,16 +71,14 @@ Deno.serve(async request => {
 
     const { data: devices, error: devicesError } = await admin
       .from("push_devices")
-      .select("expo_push_token")
+      .select("id,expo_push_token")
       .eq("user_id", job.user_id)
       .eq("enabled", true);
     if (devicesError) throw devicesError;
 
-    const tokens = (devices ?? [])
-      .map(device => device.expo_push_token as string)
-      .filter(Boolean);
+    const eligibleDevices = (devices ?? []) as PushDevice[];
 
-    if (tokens.length === 0) {
+    if (eligibleDevices.length === 0) {
       await admin.from("push_outbox").update({
         status: "skipped",
         last_error: "No enabled devices are registered for this user.",
@@ -85,12 +89,12 @@ Deno.serve(async request => {
 
     let successCount = 0;
     const errors: string[] = [];
-    const invalidTokens: string[] = [];
+    const invalidDeviceIds: string[] = [];
 
-    for (let offset = 0; offset < tokens.length; offset += 100) {
-      const chunk = tokens.slice(offset, offset + 100);
-      const messages = chunk.map(to => ({
-        to,
+    for (let offset = 0; offset < eligibleDevices.length; offset += 100) {
+      const chunk = eligibleDevices.slice(offset, offset + 100);
+      const messages = chunk.map(device => ({
+        to: device.expo_push_token,
         title: job!.title,
         body: job!.body,
         sound: "default",
@@ -114,22 +118,52 @@ Deno.serve(async request => {
         throw new Error("Expo Push Service returned an unsuccessful response.");
       }
 
-      (result.data as ExpoTicket[]).forEach((ticket, index) => {
+      const tickets = result.data as ExpoTicket[];
+      if (tickets.length !== chunk.length) {
+        errors.push("Expo returned a different number of tickets than submitted messages.");
+      }
+
+      const receiptRows: Array<{
+        outbox_id: string;
+        ticket_id: string;
+        push_device_id: string;
+      }> = [];
+
+      tickets.forEach((ticket, index) => {
+        const device = chunk[index];
         if (ticket.status === "ok") {
           successCount += 1;
+          if (device && typeof ticket.id === "string" && ticket.id.length > 0) {
+            receiptRows.push({
+              outbox_id: job!.id,
+              ticket_id: ticket.id,
+              push_device_id: device.id,
+            });
+          } else {
+            errors.push("Expo accepted a push without a usable receipt ID.");
+          }
         } else {
           errors.push((ticket.message || "Expo rejected a push message.").slice(0, 180));
-          if (ticket.details?.error === "DeviceNotRegistered" && chunk[index]) {
-            invalidTokens.push(chunk[index]);
+          if (ticket.details?.error === "DeviceNotRegistered" && device) {
+            invalidDeviceIds.push(device.id);
           }
         }
       });
+
+      if (receiptRows.length > 0) {
+        const { error: receiptInsertError } = await admin
+          .from("push_receipt_tickets")
+          .upsert(receiptRows, { onConflict: "ticket_id", ignoreDuplicates: true });
+        if (receiptInsertError) {
+          errors.push("Could not persist delivery receipt tracking for one or more devices.");
+        }
+      }
     }
 
-    if (invalidTokens.length > 0) {
+    if (invalidDeviceIds.length > 0) {
       const { error } = await admin.from("push_devices")
         .update({ enabled: false })
-        .in("expo_push_token", invalidTokens);
+        .in("id", invalidDeviceIds);
       if (error) errors.push("Could not disable invalid device tokens.");
     }
 
