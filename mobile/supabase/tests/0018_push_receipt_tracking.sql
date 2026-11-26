@@ -34,13 +34,15 @@ insert into public.push_devices(expo_push_token, user_id, platform)
 values
   ('ExponentPushToken[device-one]', '00000000-0000-0000-0000-000000000001', 'ios'),
   ('ExponentPushToken[device-two]', '00000000-0000-0000-0000-000000000002', 'android'),
-  ('ExponentPushToken[device-three]', '00000000-0000-0000-0000-000000000003', 'ios');
+  ('ExponentPushToken[device-three]', '00000000-0000-0000-0000-000000000003', 'ios'),
+  ('ExponentPushToken[device-four]', '00000000-0000-0000-0000-000000000004', 'android');
 
 insert into public.push_outbox(id, user_id)
 values
   ('10000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001'),
   ('10000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000002'),
-  ('10000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000003');
+  ('10000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000003'),
+  ('10000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000004');
 
 insert into public.push_receipt_tickets(outbox_id, ticket_id, push_device_id, created_at)
 select '10000000-0000-0000-0000-000000000001', 'receipt-ok', id, now() - interval '20 minutes'
@@ -53,6 +55,11 @@ from public.push_devices where expo_push_token = 'ExponentPushToken[device-two]'
 insert into public.push_receipt_tickets(outbox_id, ticket_id, push_device_id, created_at)
 select '10000000-0000-0000-0000-000000000003', 'receipt-reclaim', id, now() - interval '18 minutes'
 from public.push_devices where expo_push_token = 'ExponentPushToken[device-three]';
+
+insert into public.push_receipt_tickets(outbox_id, ticket_id, push_device_id, created_at, status, attempts, claimed_at)
+select '10000000-0000-0000-0000-000000000004', 'receipt-exhausted', id,
+  now() - interval '2 hours', 'processing', 20, now() - interval '21 minutes'
+from public.push_devices where expo_push_token = 'ExponentPushToken[device-four]';
 
 do $$
 begin
@@ -78,12 +85,13 @@ declare
   claimed record;
   is_enabled boolean;
   attempt_count integer;
+  final_receipt_status text;
   receipt_id uuid;
 begin
   select * into claimed
   from public.claim_push_receipt_tickets(1);
 
-  if claimed.ticket_id <> 'receipt-ok' then
+  if claimed.ticket_id is distinct from 'receipt-ok' then
     raise exception 'The oldest eligible receipt should be claimed first';
   end if;
 
@@ -97,7 +105,7 @@ begin
 
   select * into claimed
   from public.claim_push_receipt_tickets(1);
-  if claimed.ticket_id <> 'receipt-device-gone' then
+  if claimed.ticket_id is distinct from 'receipt-device-gone' then
     raise exception 'The next pending receipt should be claimed';
   end if;
   if not public.finish_push_receipt_ticket(
@@ -112,7 +120,7 @@ begin
 
   select * into claimed
   from public.claim_push_receipt_tickets(1);
-  if claimed.ticket_id <> 'receipt-reclaim' then
+  if claimed.ticket_id is distinct from 'receipt-reclaim' then
     raise exception 'The third receipt should be claimable';
   end if;
   update public.push_receipt_tickets
@@ -126,6 +134,13 @@ begin
   select attempts into attempt_count from public.push_receipt_tickets where id = claimed.id;
   if attempt_count is distinct from 2 then
     raise exception 'Reclaimed receipt attempts should increment';
+  end if;
+
+  select status into final_receipt_status
+  from public.push_receipt_tickets
+  where ticket_id = 'receipt-exhausted';
+  if final_receipt_status is distinct from 'error' then
+    raise exception 'A stale receipt at the attempt limit must be finalized instead of stranded';
   end if;
 
   begin
