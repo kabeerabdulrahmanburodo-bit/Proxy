@@ -6,6 +6,8 @@ Video posts persist their selected Public or Followers-only audience in the same
 
 Feed videos, private chat attachments and 24-hour Snaps are staged in the app's persistent document directory and uploaded to Supabase Storage with resumable TUS sessions using 6 MiB chunks. Queue metadata and TUS session URLs are stored in AsyncStorage; authentication tokens are refreshed at request time and are not persisted in the queue.
 
+Hosted Supabase project URLs are routed to the dedicated `<project-ref>.storage.supabase.co` resumable-upload hostname. Local and self-hosted Supabase URLs retain their configured origin and port. This endpoint resolution is covered by Deno tests for hosted, local, custom-host and invalid URL cases.
+
 The app pauses the JavaScript TUS loop when it backgrounds and resumes it when it returns. After an app restart, the pending-upload screen can resume from the saved TUS session. Supabase TUS sessions are discarded locally after 23 hours so the client starts a fresh session before the server's 24-hour session expiry.
 
 ## Queue recovery and cleanup

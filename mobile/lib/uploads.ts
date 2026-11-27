@@ -4,6 +4,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import * as tus from 'tus-js-client';
 import { supabase } from './supabase';
 import { resolveVideoVisibility, shouldDeleteOrphanedStagedFile, shouldRequireStagedFile } from './upload-queue-policy';
+import { resolveTusEndpoint } from './tus-endpoint';
 import type { ChatMessage, Snap, VideoPost, VideoVisibility } from './types';
 
 export type MediaUploadPurpose = 'video-post' | 'chat-attachment' | 'snap';
@@ -274,12 +275,7 @@ export async function getPendingMediaUploads(): Promise<MediaUploadJob[]> {
 function tusEndpoint() {
   const configuredUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
   if (!configuredUrl) throw new Error('Configure EXPO_PUBLIC_SUPABASE_URL before uploading.');
-  const projectUrl = new URL(configuredUrl);
-  const match = projectUrl.hostname.match(/^([a-z0-9-]+)\\.supabase\\.co$/i);
-  const storageOrigin = match
-    ? 'https://' + match[1] + '.storage.supabase.co'
-    : projectUrl.origin;
-  return storageOrigin + '/storage/v1/upload/resumable';
+  return resolveTusEndpoint(configuredUrl);
 }
 
 async function getObjectExists(job: MediaUploadJob): Promise<boolean> {

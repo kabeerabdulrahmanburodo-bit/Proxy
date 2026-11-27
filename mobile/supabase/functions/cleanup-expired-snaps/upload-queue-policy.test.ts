@@ -4,6 +4,7 @@ import {
   shouldDeleteOrphanedStagedFile,
   shouldRequireStagedFile,
 } from "../../../lib/upload-queue-policy.ts";
+import { resolveTusEndpoint } from "../../../lib/tus-endpoint.ts";
 
 Deno.test("queued staged files are never treated as orphans", () => {
   const now = 10 * ORPHAN_STAGED_FILE_GRACE_MS;
@@ -82,4 +83,45 @@ Deno.test("invalid persisted video visibility fails closed", () => {
     rejected = true;
   }
   if (!rejected) throw new Error("Unknown visibility values must not silently become public");
+});
+
+
+Deno.test("hosted Supabase projects use the dedicated Storage upload hostname", () => {
+  const endpoint = resolveTusEndpoint("https://proxy-project.supabase.co");
+  if (endpoint !== "https://proxy-project.storage.supabase.co/storage/v1/upload/resumable") {
+    throw new Error("Hosted Supabase uploads must use the Storage hostname; received " + endpoint);
+  }
+});
+
+Deno.test("hosted Supabase project URLs with paths still resolve from the project origin", () => {
+  const endpoint = resolveTusEndpoint("https://proxy-project.supabase.co/rest/v1");
+  if (endpoint !== "https://proxy-project.storage.supabase.co/storage/v1/upload/resumable") {
+    throw new Error("The configured path must not leak into the Storage endpoint; received " + endpoint);
+  }
+});
+
+Deno.test("local Supabase URLs preserve host and port", () => {
+  const endpoint = resolveTusEndpoint("http://127.0.0.1:54321");
+  if (endpoint !== "http://127.0.0.1:54321/storage/v1/upload/resumable") {
+    throw new Error("Local Supabase must keep its origin and port; received " + endpoint);
+  }
+});
+
+Deno.test("self-hosted Supabase URLs preserve their configured origin", () => {
+  const endpoint = resolveTusEndpoint("https://supabase.example.internal:8443/base");
+  if (endpoint !== "https://supabase.example.internal:8443/storage/v1/upload/resumable") {
+    throw new Error("Self-hosted Supabase must keep its origin and port; received " + endpoint);
+  }
+});
+
+Deno.test("invalid and non-HTTP Supabase URLs are rejected", () => {
+  for (const value of ["not-a-url", "ftp://proxy-project.supabase.co"]) {
+    let rejected = false;
+    try {
+      resolveTusEndpoint(value);
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error("Expected invalid URL to be rejected: " + value);
+  }
 });
