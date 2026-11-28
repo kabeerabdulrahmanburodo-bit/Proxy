@@ -80,6 +80,41 @@ function mapRankedVideoRows(rows: RankedVideoFeedRow[] | null | undefined): Vide
   }));
 }
 
+
+type VideoEngagementRow = {
+  video_id: string;
+  likes_count: number | string;
+  viewer_liked: boolean;
+};
+
+async function attachVideoEngagement(posts: VideoPost[]): Promise<VideoPost[]> {
+  if (posts.length === 0) return posts;
+  const { data, error } = await supabase.rpc('get_video_engagement', {
+    p_video_ids: posts.map(post => post.id),
+  });
+  if (error) {
+    if (error.code === 'PGRST202' || error.code === '42883') {
+      return posts.map(post => ({
+        ...post,
+        likes_count: post.likes_count ?? 0,
+        viewer_liked: post.viewer_liked ?? false,
+      }));
+    }
+    throw error;
+  }
+  const byVideoId = new Map(
+    ((data ?? []) as VideoEngagementRow[]).map(row => [row.video_id, row] as const),
+  );
+  return posts.map(post => {
+    const engagement = byVideoId.get(post.id);
+    return {
+      ...post,
+      likes_count: Number(engagement?.likes_count ?? 0),
+      viewer_liked: engagement?.viewer_liked === true,
+    };
+  });
+}
+
 export async function getVideoFeed(
   limit = VIDEO_FEED_PAGE_SIZE,
   offset = 0,
@@ -93,7 +128,7 @@ export async function getVideoFeed(
     'get_personalized_video_feed',
     { p_limit: requestedLimit, p_offset: requestedOffset },
   );
-  if (!rankingError) return mapRankedVideoRows(ranked as RankedVideoFeedRow[] | null);
+  if (!rankingError) return attachVideoEngagement(mapRankedVideoRows(ranked as RankedVideoFeedRow[] | null));
 
   // During migration rollout or a delayed PostgREST schema-cache refresh, the
   // original one-argument RPC remains available for its first 50 ranked results.
@@ -106,8 +141,10 @@ export async function getVideoFeed(
     { p_limit: legacyLimit },
   );
   if (!legacyError) {
-    return mapRankedVideoRows(legacy as RankedVideoFeedRow[] | null)
-      .slice(requestedOffset, requestedOffset + requestedLimit);
+    return attachVideoEngagement(
+      mapRankedVideoRows(legacy as RankedVideoFeedRow[] | null)
+        .slice(requestedOffset, requestedOffset + requestedLimit),
+    );
   }
   if (legacyError.code !== 'PGRST202' && legacyError.code !== '42883') {
     throw legacyError;
@@ -127,11 +164,34 @@ export async function getVideoFeed(
     .limit(candidateLimit);
   if (error) throw error;
   const posts = (data ?? []) as unknown as VideoPost[];
-  return posts.sort((a, b) =>
+  return attachVideoEngagement(posts.sort((a, b) =>
     Number(followingIds.includes(b.user_id)) - Number(followingIds.includes(a.user_id)) ||
     b.created_at.localeCompare(a.created_at) ||
     a.id.localeCompare(b.id)
-  ).slice(requestedOffset, requestedOffset + requestedLimit);
+  ).slice(requestedOffset, requestedOffset + requestedLimit));
+}
+
+
+export async function setVideoLike(videoId: string, liked: boolean): Promise<void> {
+  if (!videoId) throw new Error('Choose a video to like.');
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError) throw userError;
+  if (!user) throw new Error('Sign in to like videos.');
+
+  if (liked) {
+    const { error } = await supabase.from('video_likes').upsert(
+      { video_id: videoId, user_id: user.id },
+      { onConflict: 'video_id,user_id', ignoreDuplicates: true },
+    );
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await supabase.from('video_likes')
+    .delete()
+    .eq('video_id', videoId)
+    .eq('user_id', user.id);
+  if (error) throw error;
 }
 
 export async function publishVideo(

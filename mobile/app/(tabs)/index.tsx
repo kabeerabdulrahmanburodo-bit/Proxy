@@ -2,13 +2,27 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, FlatList, Modal, Pressable, RefreshControl, Text, View } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useRouter } from 'expo-router';
-import { blockUser, getVideoFeed, getVideoPlaybackUrl, recordVideoView, reportVideo, VIDEO_FEED_MAX_OFFSET, VIDEO_FEED_PAGE_SIZE } from '../../lib/social';
+import { blockUser, getVideoFeed, getVideoPlaybackUrl, recordVideoView, reportVideo, setVideoLike, VIDEO_FEED_MAX_OFFSET, VIDEO_FEED_PAGE_SIZE } from '../../lib/social';
 import type { VideoPost, VideoReportReason } from '../../lib/types';
 
 const purple = '#a78bfa', white = '#fafafa', muted = '#a1a1aa';
 const CARD_HEIGHT = Dimensions.get('window').height - 142;
 
-function VideoCard({ post, active, onOptions }: { post: VideoPost; active: boolean; onOptions: () => void }) {
+function formatLikeCount(value: number) {
+  if (value < 1000) return String(value);
+  if (value < 1_000_000) return (value / 1000).toFixed(value < 10_000 ? 1 : 0) + 'K';
+  return (value / 1_000_000).toFixed(value < 10_000_000 ? 1 : 0) + 'M';
+}
+
+function VideoCard({
+  post, active, onOptions, onLike, likeBusy,
+}: {
+  post: VideoPost;
+  active: boolean;
+  onOptions: () => void;
+  onLike: () => void;
+  likeBusy: boolean;
+}) {
   const player = useVideoPlayer(null, instance => { instance.loop = true; });
   const [playbackReady, setPlaybackReady] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
@@ -122,6 +136,24 @@ function VideoCard({ post, active, onOptions }: { post: VideoPost; active: boole
       <View pointerEvents="none" style={{ position: 'absolute', top: 16, left: 16, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20 }}>
         <Text style={{ color: white, fontSize: 11, fontWeight: '800' }}>PROXY VIDEO</Text>
       </View>
+      <View style={{ position: 'absolute', right: 14, bottom: 104, alignItems: 'center' }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={post.viewer_liked ? 'Unlike video' : 'Like video'}
+          accessibilityState={{ selected: post.viewer_liked === true, disabled: likeBusy }}
+          onPress={onLike}
+          disabled={likeBusy}
+          hitSlop={10}
+          style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', opacity: likeBusy ? 0.55 : 1 }}
+        >
+          <Text style={{ color: post.viewer_liked ? '#fb7185' : white, fontSize: 30, fontWeight: '900' }}>
+            {post.viewer_liked ? '♥' : '♡'}
+          </Text>
+        </Pressable>
+        <Text style={{ color: white, fontSize: 11, fontWeight: '900', marginTop: 4 }}>
+          {formatLikeCount(post.likes_count ?? 0)}
+        </Text>
+      </View>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Video safety options"
@@ -149,6 +181,8 @@ export default function Feed() {
   const feedRequestVersionRef = useRef(0);
   const [reportingPost, setReportingPost] = useState<VideoPost | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
+  const [likingIds, setLikingIds] = useState<string[]>([]);
+  const likingIdsRef = useRef(new Set<string>());
 
   const load = useCallback(async (refresh = false) => {
     const requestVersion = ++feedRequestVersionRef.current;
@@ -210,6 +244,35 @@ export default function Feed() {
       if (requestVersion === feedRequestVersionRef.current) setLoadingMore(false);
     }
   }, [busy, refreshing, hasMore, posts]);
+
+  const toggleVideoLike = useCallback(async (post: VideoPost) => {
+    if (likingIdsRef.current.has(post.id)) return;
+    likingIdsRef.current.add(post.id);
+    setLikingIds(current => [...current, post.id]);
+
+    const previousLiked = post.viewer_liked === true;
+    const previousCount = post.likes_count ?? 0;
+    const nextLiked = !previousLiked;
+    setPosts(current => current.map(item => item.id === post.id ? {
+      ...item,
+      viewer_liked: nextLiked,
+      likes_count: Math.max(0, previousCount + (nextLiked ? 1 : -1)),
+    } : item));
+
+    try {
+      await setVideoLike(post.id, nextLiked);
+    } catch (error) {
+      setPosts(current => current.map(item => item.id === post.id ? {
+        ...item,
+        viewer_liked: previousLiked,
+        likes_count: previousCount,
+      } : item));
+      Alert.alert('Like video', error instanceof Error ? error.message : 'Could not update your like.');
+    } finally {
+      likingIdsRef.current.delete(post.id);
+      setLikingIds(current => current.filter(id => id !== post.id));
+    }
+  }, []);
 
   function openVideoOptions(post: VideoPost) {
     Alert.alert('Video options', '@' + (post.profiles?.username ?? 'creator'), [
@@ -318,7 +381,7 @@ export default function Feed() {
               <Text style={{ color: '#181024', fontWeight: '900' }}>UPLOAD A VIDEO</Text>
             </Pressable>
           </View>}
-          renderItem={({ item }) => <VideoCard post={item} active={activeId === item.id} onOptions={() => openVideoOptions(item)} />}
+          renderItem={({ item }) => <VideoCard post={item} active={activeId === item.id} onOptions={() => openVideoOptions(item)} onLike={() => void toggleVideoLike(item)} likeBusy={likingIds.includes(item.id)} />}
         />
       }
       <Modal

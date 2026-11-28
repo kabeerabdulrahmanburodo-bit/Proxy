@@ -16,7 +16,7 @@ cp .env.example .env
 npx expo start
 ~~~
 
-In Supabase SQL Editor, run migrations 0001 through 0017 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migrations 0014, 0015, 0016 and 0017. Apply migration 0018 only after the push-receipt secret and its Edge Function are configured as described below. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
+In Supabase SQL Editor, run migrations 0001 through 0019 in filename order. Before applying migration 0012, deploy the Snap cleanup Edge Function and configure its Vault secrets as described below. Apply migration 0013 after 0012, then migrations 0014, 0015, 0016 and 0017. Apply migration 0018 only after the push-receipt secret and its Edge Function are configured as described below; apply migration 0019 after 0018. In Authentication settings, configure email confirmation and password policies. Never put a Supabase service-role key in the mobile app; only the anon/publishable key belongs in EXPO_PUBLIC variables. RLS is the security boundary.
 
 ## Current implementation
 - Expo Router mobile shell with Discover, Chats, Snaps and Profile tabs
@@ -72,7 +72,7 @@ PostgreSQL creates in-app notification rows for new direct/group messages, follo
    ```
    Supabase supplies SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to Edge Functions. Never copy either value into the app or repository.
 3. In Supabase Vault, create `proxy_push_receipt_secret` with the same value as PROXY_PUSH_RECEIPT_SECRET. Migration 0018 also reads the existing `proxy_project_url` and `proxy_publishable_key`; do not query or print decrypted Vault values.
-4. Apply migrations 0001 through 0017 in order, respecting the migration 0012 prerequisites, then apply `0018_push_receipt_tracking.sql`. It adds the private ticket table and service-role-only claim/finalize RPCs and schedules a 15-minute receipt poller when the three required Vault secrets exist. If the receipt secret was added after migration 0018 was first applied, re-run migration 0018 to install/update the cron job.
+4. Apply migrations 0001 through 0017 in order, respecting the migration 0012 prerequisites, then apply `0018_push_receipt_tracking.sql` and `0019_video_engagement.sql`. Migration 0018 adds the private ticket table and service-role-only claim/finalize RPCs and schedules a 15-minute receipt poller when the three required Vault secrets exist. If the receipt secret was added after migration 0018 was first applied, re-run migration 0018 to install/update the cron job. Migration 0019 adds the authenticated, visibility-filtered video like aggregate used by Discover.
 5. Deploy the push Edge Functions:
    ```bash
    supabase functions deploy send-push-notification
@@ -193,6 +193,10 @@ Chat-attachment uploads to a blocked direct conversation are also denied by Stor
 The chat screen checks the server permission before enabling the composer and attachment picker. If the check fails, sending is disabled and the user can retry the permission check. The database policies remain authoritative if a block changes while a screen is open.
 
 Apply `0016_blocked_direct_messaging.sql` after `0015_private_video_delivery.sql`. The PostgreSQL 16 fixture `supabase/tests/0016_blocked_direct_messaging.sql` reuses the video-safety fixture and verifies both block directions, existing-chat restrictions, group-chat behavior, attachment upload denial, retained history, unblock recovery and RPC grants.
+
+## Video likes (migration 0019)
+
+Discover loads each page's like count and the signed-in viewer's own like state in one bounded RPC call. The heart control updates optimistically and rolls back if the RLS-protected write fails. The RPC returns aggregate counts only for videos the viewer can currently access; blocked creators, private videos and follower-only videos for non-followers return no engagement row. If migration 0019 is not yet visible in PostgREST, the feed remains playable with zeroed like metadata until the migration is deployed. Direct like writes continue to use the existing `video_likes` table and its RLS policies.
 
 ## Important production work still required
 1. Deploy and monitor the scheduled Snap cleanup and push-receipt jobs; their functions, Vault secrets and cron schedules still require project-owner setup.

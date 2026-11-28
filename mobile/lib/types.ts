@@ -6,7 +6,7 @@ export type Profile = {
 };
 export type VideoPost = {
   id: string; user_id: string; caption: string | null; video_url: string;
-  thumbnail_url: string | null; created_at: string; likes_count?: number;
+  thumbnail_url: string | null; created_at: string; likes_count?: number; viewer_liked?: boolean;
   profiles?: Pick<Profile, 'username' | 'avatar_url'>;
 };
 export type ChatMessage = {
