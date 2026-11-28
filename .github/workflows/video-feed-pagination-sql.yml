@@ -1,0 +1,45 @@
+name: Video feed pagination SQL test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    paths:
+      - 'mobile/supabase/migrations/0017_personalized_video_feed_pagination.sql'
+      - 'mobile/supabase/tests/0017_personalized_video_feed_pagination.sql'
+      - '.github/workflows/video-feed-pagination-sql.yml'
+  push:
+    branches:
+      - feature/proxy-social-mobile
+    paths:
+      - 'mobile/supabase/migrations/0017_personalized_video_feed_pagination.sql'
+      - 'mobile/supabase/tests/0017_personalized_video_feed_pagination.sql'
+      - '.github/workflows/video-feed-pagination-sql.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  migration-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: proxy_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d proxy_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Apply feed migrations and verify pagination, visibility and grants
+        env:
+          PGPASSWORD: postgres
+        run: psql "postgresql://postgres@localhost:5432/proxy_test" -f mobile/supabase/tests/0017_personalized_video_feed_pagination.sql

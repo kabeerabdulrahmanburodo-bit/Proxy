@@ -1,0 +1,45 @@
+name: Blocked direct messaging SQL test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    paths:
+      - 'mobile/supabase/migrations/0016_blocked_direct_messaging.sql'
+      - 'mobile/supabase/tests/0016_blocked_direct_messaging.sql'
+      - '.github/workflows/blocked-direct-messaging-sql.yml'
+  push:
+    branches:
+      - feature/proxy-social-mobile
+    paths:
+      - 'mobile/supabase/migrations/0016_blocked_direct_messaging.sql'
+      - 'mobile/supabase/tests/0016_blocked_direct_messaging.sql'
+      - '.github/workflows/blocked-direct-messaging-sql.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  blocked-direct-messaging-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: proxy_blocked_messaging_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d proxy_blocked_messaging_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Apply fixtures and verify blocked direct messaging
+        env:
+          PGPASSWORD: postgres
+        run: psql "postgresql://postgres@localhost:5432/proxy_blocked_messaging_test" -f mobile/supabase/tests/0016_blocked_direct_messaging.sql

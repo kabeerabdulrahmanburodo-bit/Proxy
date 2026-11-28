@@ -1,0 +1,45 @@
+name: Private video storage SQL test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    paths:
+      - 'mobile/supabase/migrations/0015_private_video_delivery.sql'
+      - 'mobile/supabase/tests/0015_private_video_delivery.sql'
+      - '.github/workflows/video-private-storage-sql.yml'
+  push:
+    branches:
+      - feature/proxy-social-mobile
+    paths:
+      - 'mobile/supabase/migrations/0015_private_video_delivery.sql'
+      - 'mobile/supabase/tests/0015_private_video_delivery.sql'
+      - '.github/workflows/video-private-storage-sql.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  private-video-storage-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: proxy_private_video_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d proxy_private_video_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Apply migrations and verify private video delivery
+        env:
+          PGPASSWORD: postgres
+        run: psql "postgresql://postgres@localhost:5432/proxy_private_video_test" -f mobile/supabase/tests/0015_private_video_delivery.sql
